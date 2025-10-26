@@ -1,4 +1,5 @@
-import { Tabs } from 'expo-router';
+// app/(tabs)/_layout.tsx
+import { Tabs, Redirect } from 'expo-router';
 import React from 'react';
 
 import { HapticTab } from '@/components/haptic-tab';
@@ -15,19 +16,54 @@ export default function TabLayout() {
         tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
         headerShown: false,
         tabBarButton: HapticTab,
-      }}>
+        tabBarStyle: { display: 'none' },
+      }}
+      initialRouteName="pos" // Set POS as initial route
+    >
       <Tabs.Screen
         name="index"
         options={{
           title: 'Home',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="house.fill" color={color} />,
+        }}
+        listeners={{
+          tabPress: (e) => {
+            // Prevent default navigation, redirect to POS instead
+            e.preventDefault();
+          },
         }}
       />
       <Tabs.Screen
         name="explore"
         options={{
           title: 'Explore',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="paperplane.fill" color={color} />,
+        }}
+        listeners={{
+          tabPress: (e) => {
+            e.preventDefault();
+          },
+        }}
+      />
+      <Tabs.Screen
+        name="restaurant"
+        options={{
+          title: 'Restaurant',
+        }}
+        listeners={{
+          tabPress: (e) => {
+            e.preventDefault();
+          },
+        }}
+      />
+      <Tabs.Screen
+        name="pos"
+        options={{
+          title: 'POS',
+        }}
+      />
+      <Tabs.Screen
+        name="items"
+        options={{
+          title: 'Items',
         }}
       />
     </Tabs>

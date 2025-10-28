@@ -1,26 +1,70 @@
 // components/Navbar.tsx
-import { StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import { StyleSheet, ScrollView, TouchableOpacity, View } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Feather } from "@expo/vector-icons";
 import { useRouter, usePathname } from 'expo-router';
+import { useEffect, useState } from 'react';
+import { OfflineSyncService } from '@/lib/offline-sync';
 
 interface NavbarProps {
     activeNav?: string;
 }
 
+interface SyncStatus {
+    isSyncing: boolean;
+    lastSync: number | null;
+    pendingItems: number;
+}
+
 export default function Navbar({ activeNav }: NavbarProps) {
     const router = useRouter();
     const pathname = usePathname();
+    const [syncStatus, setSyncStatus] = useState<SyncStatus>({
+        isSyncing: false,
+        lastSync: null,
+        pendingItems: 0
+    });
 
     // Determine active nav based on current route
     const currentActiveNav = activeNav || (pathname === '/pos' ? 'pos' :
         pathname === '/items' ? 'items' : 'pos');
 
-    const navigateTo = (route: '/' | '/pos' | '/items', nav: string) => {
+    const navigateTo = (route: '/' | '/pos' | '/items' | '/sales-expense', nav: string) => {
         if (route !== pathname) {
             router.push(route as any);
         }
+    };
+
+    useEffect(() => {
+        const syncService = OfflineSyncService.getInstance();
+
+        const handleSyncStatusChange = (status: SyncStatus) => {
+            setSyncStatus(status);
+        };
+
+        syncService.addSyncListener(handleSyncStatusChange);
+
+        return () => {
+            syncService.removeSyncListener(handleSyncStatusChange);
+        };
+    }, []);
+
+    const getSyncIcon = (): { name: keyof typeof Feather.glyphMap; color: string } => {
+        if (syncStatus.isSyncing) {
+            return { name: 'refresh-cw', color: '#FFA500' }; // Orange for syncing
+        } else if (syncStatus.pendingItems > 0) {
+            return { name: 'wifi-off', color: '#DC2626' }; // Red for pending items
+        } else {
+            return { name: 'check-circle', color: '#16A34A' }; // Green for synced
+        }
+    };
+
+    const syncIcon = getSyncIcon();
+
+    const handleManualSync = async () => {
+        const syncService = OfflineSyncService.getInstance();
+        await syncService.manualSync();
     };
 
     return (
@@ -28,7 +72,15 @@ export default function Navbar({ activeNav }: NavbarProps) {
             <ThemedText style={styles.navbarTitle}>
                 THE <ThemedText style={styles.sectionTitle1}>KAPE </ThemedText> SPOT
             </ThemedText>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.navbarScroll}>
+
+            <View style={styles.navbarContent}>
+                <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    style={styles.navbarScroll}
+                    contentContainerStyle={styles.scrollContent}
+                >
+                </ScrollView>
 
                 <TouchableOpacity
                     style={styles.navLink}
@@ -89,7 +141,7 @@ export default function Navbar({ activeNav }: NavbarProps) {
 
                 <TouchableOpacity
                     style={styles.navLink}
-                    onPress={() => console.log('Sales clicked')}
+                    onPress={() => navigateTo('/sales-expense', 'sales')}
                 >
                     <Feather
                         name="bar-chart-2"
@@ -144,7 +196,26 @@ export default function Navbar({ activeNav }: NavbarProps) {
                     {currentActiveNav === 'order-status' && <ThemedView style={styles.activeIndicator} />}
                 </TouchableOpacity>
 
-                {/* Account Circle */}
+                {/* Sync Indicator */}
+                <TouchableOpacity
+                    style={styles.syncIndicator}
+                    onPress={handleManualSync}
+                >
+                    <Feather
+                        name={syncIcon.name}
+                        size={16}
+                        color={syncIcon.color}
+                    />
+                    {syncStatus.pendingItems > 0 && (
+                        <ThemedView style={styles.pendingBadge}>
+                            <ThemedText style={styles.pendingText}>
+                                {syncStatus.pendingItems > 9 ? '9+' : syncStatus.pendingItems}
+                            </ThemedText>
+                        </ThemedView>
+                    )}
+                </TouchableOpacity>
+
+                {/* Account Circle - Fixed on the right side */}
                 <TouchableOpacity
                     style={styles.accountCircle}
                     onPress={() => console.log('Account clicked')}
@@ -152,12 +223,11 @@ export default function Navbar({ activeNav }: NavbarProps) {
                     <Feather
                         name="user"
                         size={20}
-                        color={currentActiveNav === 'account' ? '#874E3B' : '#874E3B'}
+                        color="#874E3B"
                     />
                     {currentActiveNav === 'account' && <ThemedView style={styles.activeIndicator} />}
                 </TouchableOpacity>
-
-            </ScrollView>
+            </View>
         </ThemedView>
     );
 }
@@ -179,23 +249,33 @@ const styles = StyleSheet.create({
         borderTopLeftRadius: 20,
         borderTopRightRadius: 20,
         marginLeft: 5,
-        marginRight: 5
+        marginRight: 5,
+        alignItems: 'center',
     },
     navbarTitle: {
-        fontSize: 25,
+        fontSize: 30,
         fontFamily: 'LobsterTwoRegular',
         color: '#FFFEEA',
-        marginRight: 50,
-        marginTop: 12
+        marginRight: 20,
+        marginLeft: 30,
+        lineHeight: 40
+    },
+    navbarContent: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
     },
     navbarScroll: {
         flex: 1,
+    },
+    scrollContent: {
+        flexGrow: 1,
+        alignItems: 'center',
     },
     navLink: {
         paddingHorizontal: 15,
         paddingVertical: 10,
         position: 'relative',
-        marginTop: 5,
         alignItems: 'center',
         flexDirection: 'row',
     },
@@ -231,12 +311,11 @@ const styles = StyleSheet.create({
         backgroundColor: '#FFFEEA',
         justifyContent: 'center',
         alignItems: 'center',
-        marginLeft: 15,
-        marginTop: 5,
+        marginLeft: 10,
         position: 'relative',
     },
     sectionTitle1: {
-        fontSize: 30,
+        fontSize: 35,
         fontFamily: 'LobsterTwoItalic',
         color: '#FFFEEA',
         textShadowColor: 'rgba(255, 215, 0, 0.8)',
@@ -247,5 +326,34 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.8,
         shadowRadius: 10,
         elevation: 10,
+    },
+    syncIndicator: {
+        padding: 8,
+        position: 'relative',
+        marginLeft: 10,
+        backgroundColor: 'rgba(255, 255, 255, 0.1)',
+        borderRadius: 20,
+        width: 36,
+        height: 36,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    pendingBadge: {
+        position: 'absolute',
+        top: 2,
+        right: 2,
+        backgroundColor: '#DC2626',
+        borderRadius: 8,
+        minWidth: 16,
+        height: 16,
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#FFFEEA',
+    },
+    pendingText: {
+        color: '#FFFEEA',
+        fontSize: 8,
+        fontWeight: 'bold',
     },
 });

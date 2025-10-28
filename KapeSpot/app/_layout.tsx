@@ -7,6 +7,8 @@ import 'react-native-reanimated';
 
 // Import with proper typing
 import * as ScreenOrientation from 'expo-screen-orientation';
+import { StatusBar } from 'react-native';
+import * as NavigationBar from 'expo-navigation-bar';
 
 export default function RootLayout() {
   const [loaded] = useFonts({
@@ -17,22 +19,36 @@ export default function RootLayout() {
   });
 
   useEffect(() => {
-    // Lock to landscape orientation
-    async function setOrientation() {
+    async function initializeApp() {
       try {
+        // Lock to landscape orientation
         await ScreenOrientation.lockAsync(
           ScreenOrientation.OrientationLock.LANDSCAPE
         );
+
+        // Hide Android navigation bar
+        (NavigationBar as any).setVisibilityAsync('hidden');
+        // Optional: make background transparent
+        // await NavigationBar.setBackgroundColorAsync('transparent');
+
+        // Hide status bar (top)
+        StatusBar.setHidden(true);
+
+        if (loaded) {
+          await SplashScreen.hideAsync();
+        }
       } catch (error) {
-        console.error('Failed to set orientation:', error);
+        console.error('Initialization error:', error);
       }
     }
 
-    setOrientation();
+    initializeApp();
 
-    if (loaded) {
-      SplashScreen.hideAsync();
-    }
+    // Restore bars if component unmounts
+    return () => {
+      NavigationBar.setVisibilityAsync('visible').catch(() => { });
+      StatusBar.setHidden(false);
+    };
   }, [loaded]);
 
   if (!loaded) {
@@ -40,9 +56,12 @@ export default function RootLayout() {
   }
 
   return (
-    <Stack>
-      <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-      <Stack.Screen name="+not-found" />
-    </Stack>
+    <>
+      <StatusBar hidden={true} />
+      <Stack>
+        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        <Stack.Screen name="+not-found" />
+      </Stack>
+    </>
   );
 }

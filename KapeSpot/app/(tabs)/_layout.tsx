@@ -66,6 +66,12 @@ export default function TabLayout() {
           title: 'Items',
         }}
       />
+      <Tabs.Screen
+        name="sales-expense"
+        options={{
+          title: 'Sales & Expense',
+        }}
+      />
     </Tabs>
   );
 }

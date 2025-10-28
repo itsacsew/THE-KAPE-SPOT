@@ -1,10 +1,15 @@
 // app/(tabs)/items.tsx
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { StyleSheet, ScrollView, TextInput, TouchableOpacity, ImageBackground, Alert } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Feather } from "@expo/vector-icons";
 import Navbar from '@/components/Navbar';
+import { router } from 'expo-router';
+import { NetworkScanner } from '@/lib/network-scanner';
+import { useFocusEffect } from '@react-navigation/native';
+import React from 'react';
+import { OfflineSyncService } from '@/lib/offline-sync';
 
 interface MenuItem {
     id: string;
@@ -12,26 +17,153 @@ interface MenuItem {
     name: string;
     price: number;
     category: string;
-    options: number;
+    stocks: number;
     sales: number;
     status: boolean;
+    description?: string;
+    image?: string;
+    isOffline?: boolean;
+}
+
+interface Category {
+    id: string;
+    name: string;
+}
+
+interface ApiMenuItem {
+    id: number | string;
+    code: string;
+    name: string;
+    price: string | number;
+    category: string;
+    stocks: string | number;
+    sales: string | number;
+    status: string | number | boolean;
+    description?: string;
+    image?: string | null;
+    created_at?: string;
+    updated_at?: string;
 }
 
 export default function ItemsScreen() {
     const [searchQuery, setSearchQuery] = useState('');
-    const [menuItems, setMenuItems] = useState<MenuItem[]>([
-        { id: '1', code: '18754', name: 'Cheese Burst Sandwich', price: 12.00, category: 'Fast Food', options: 3, sales: 112, status: true },
-        { id: '2', code: '18755', name: 'Red Source Pasta', price: 12.00, category: 'Fast Food', options: 2, sales: 214, status: true },
-        { id: '3', code: '18756', name: 'Sugar Free Coke', price: 12.00, category: 'Beverages', options: 4, sales: 98, status: true },
-        { id: '4', code: '18757', name: 'Cassata Vanilla Ice Cream', price: 12.00, category: 'Dessert', options: 2, sales: 102, status: true },
-        { id: '5', code: '18758', name: 'Hamm Burger', price: 12.00, category: 'Fast Food', options: 2, sales: 221, status: true },
-        { id: '6', code: '18759', name: 'Rosted Chicken Legs', price: 12.00, category: 'Main Course', options: 0, sales: 99, status: true },
-        { id: '7', code: '18760', name: 'Red Rose Juice', price: 12.00, category: 'Beverages', options: 0, sales: 121, status: true },
-    ]);
-
+    const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
+    const [categories, setCategories] = useState<Category[]>([]);
     const [activeSidebar, setActiveSidebar] = useState('food-items');
     const [currentPage, setCurrentPage] = useState(1);
+    const [loading, setLoading] = useState(false);
+    const [isOnlineMode, setIsOnlineMode] = useState<boolean>(false);
     const itemsPerPage = 10;
+
+    // Function to get dynamic API URL
+    const getApiBaseUrl = async (): Promise<string> => {
+        try {
+            const serverIP = await NetworkScanner.findServerIP();
+
+            if (serverIP === 'demo') {
+                console.log('🔄 Running in demo mode');
+                setIsOnlineMode(false);
+                return 'demo';
+            }
+
+            const baseUrl = `http://${serverIP}/backend/api`;
+            console.log(`🌐 Using server: ${baseUrl}`);
+            setIsOnlineMode(true);
+            return baseUrl;
+
+        } catch (error) {
+            console.log('❌ Error detecting server, using demo mode');
+            setIsOnlineMode(false);
+            return 'demo';
+        }
+    };
+
+    // Demo data
+    const demoData: MenuItem[] = [
+        { id: '1', code: '18754', name: 'Cheese Burst Sandwich', price: 12.00, category: 'Sandwich', stocks: 50, sales: 112, status: true, description: 'Delicious cheese burst sandwich' },
+    ];
+
+    // Load menu items from API - SEPARATE LOGIC FOR ONLINE vs OFFLINE
+    const loadMenuItems = async () => {
+        setLoading(true);
+        try {
+            const syncService = OfflineSyncService.getInstance();
+            const API_BASE_URL = await getApiBaseUrl();
+
+            if (API_BASE_URL === 'demo') {
+                console.log('📱 Loading OFFLINE data (demo + local storage)...');
+                // OFFLINE MODE: Show ONLY local storage items + demo data
+                const offlineItems = await syncService.getItems();
+                const allOfflineItems = [...demoData, ...offlineItems];
+
+                const items: MenuItem[] = allOfflineItems.map(item => ({
+                    ...item,
+                    isOffline: true // Mark all as offline
+                }));
+
+                setMenuItems(items);
+                console.log('✅ Loaded OFFLINE items:', items.length, 'items');
+                return;
+            }
+
+            console.log('🔗 Fetching from SERVER (ONLINE MODE)...');
+            const response = await fetch(`${API_BASE_URL}/items.php`);
+
+            if (!response.ok) throw new Error('HTTP error');
+
+            const data: ApiMenuItem[] = await response.json();
+            console.log('📦 Server data received:', data.length, 'items');
+
+            // ONLINE MODE: Show ONLY server items (no local storage items)
+            const serverItems: MenuItem[] = data.map((item: ApiMenuItem) => ({
+                id: String(item.id),
+                code: String(item.code),
+                name: String(item.name),
+                price: Number(item.price),
+                category: String(item.category),
+                stocks: Number(item.stocks || 0),
+                sales: Number(item.sales || 0),
+                status: item.status === '1' || item.status === 1 || item.status === true,
+                description: item.description ? String(item.description) : '',
+                image: item.image || undefined,
+                isOffline: false // Mark as online
+            }));
+
+            setMenuItems(serverItems);
+            console.log('✅ Loaded ONLINE items:', serverItems.length, 'server items');
+
+        } catch (error) {
+            console.error('❌ Error loading items:', error);
+            // Fallback to OFFLINE mode on error
+            const syncService = OfflineSyncService.getInstance();
+            const offlineItems = await syncService.getItems();
+            setMenuItems([...demoData, ...offlineItems]);
+            setIsOnlineMode(false);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // Load categories from API
+    const loadCategories = async () => {
+        try {
+            const API_BASE_URL = await getApiBaseUrl();
+            if (API_BASE_URL === 'demo') return;
+
+            const response = await fetch(`${API_BASE_URL}/categories.php`);
+            const data = await response.json();
+            setCategories(data);
+        } catch (error) {
+            console.error('Error loading categories:', error);
+        }
+    };
+
+    useFocusEffect(
+        React.useCallback(() => {
+            loadMenuItems();
+            loadCategories();
+        }, [])
+    );
 
     const filteredItems = menuItems.filter(item =>
         item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -43,11 +175,11 @@ export default function ItemsScreen() {
     const startIndex = (currentPage - 1) * itemsPerPage;
     const paginatedItems = filteredItems.slice(startIndex, startIndex + itemsPerPage);
 
-    const addNewItem = () => {
-        Alert.alert('Add New', 'Add new item functionality');
+    const handleAddNewItem = () => {
+        router.push('/add-item');
     };
 
-    const deleteItem = (id: string) => {
+    const deleteItem = async (id: string) => {
         Alert.alert(
             'Delete Item',
             'Are you sure you want to delete this item?',
@@ -56,18 +188,127 @@ export default function ItemsScreen() {
                 {
                     text: 'Delete',
                     style: 'destructive',
-                    onPress: () => {
-                        setMenuItems(prev => prev.filter(item => item.id !== id));
+                    onPress: async () => {
+                        setLoading(true);
+                        try {
+                            const syncService = OfflineSyncService.getInstance();
+                            const API_BASE_URL = await getApiBaseUrl();
+
+                            // Find the item first to check if it's offline
+                            const itemToDelete = menuItems.find(item => item.id === id);
+                            const isOfflineItem = itemToDelete?.isOffline;
+
+                            // Get current counts before deletion
+                            const localItemsBefore = await syncService.getItems();
+                            const totalItemsBefore = menuItems.length;
+
+                            console.log('📊 TOTAL ITEMS BEFORE DELETION:');
+                            console.log('   UI Items:', totalItemsBefore);
+                            console.log('   Local Storage:', localItemsBefore.length);
+                            console.log('   Item to delete:', itemToDelete?.name, `(ID: ${id})`);
+
+                            if (API_BASE_URL === 'demo' || !isOnlineMode || isOfflineItem) {
+                                // OFFLINE MODE or OFFLINE ITEM: Remove from local storage
+                                console.log('📱 DELETING FROM LOCAL STORAGE...');
+
+                                const success = await syncService.deleteLocalItem(id);
+
+                                if (success) {
+                                    // Remove from local state
+                                    setMenuItems(prev => prev.filter(item => item.id !== id));
+
+                                    // Get counts after deletion
+                                    const localItemsAfter = await syncService.getItems();
+                                    const totalItemsAfter = menuItems.length - 1;
+
+                                    console.log('🎯 DELETION COMPLETE - LOCAL STORAGE:');
+                                    console.log('   UI Items:', totalItemsAfter, `(-1)`);
+                                    console.log('   Local Storage:', localItemsAfter.length, `(-${localItemsBefore.length - localItemsAfter.length})`);
+
+                                    Alert.alert(
+                                        'Success',
+                                        `Item deleted successfully from local storage\n\nRemaining: ${localItemsAfter.length} items in local storage`
+                                    );
+                                } else {
+                                    Alert.alert('Error', 'Failed to delete item from local storage');
+                                }
+                                return;
+                            }
+
+                            // ONLINE MODE + ONLINE ITEM: Delete from server
+                            console.log('🌐 DELETING FROM SERVER...');
+                            const response = await fetch(`${API_BASE_URL}/items.php?id=${id}`, {
+                                method: 'DELETE',
+                            });
+                            const result = await response.json();
+
+                            if (result.success) {
+                                // Remove from local state
+                                setMenuItems(prev => prev.filter(item => item.id !== id));
+
+                                // Also remove from local storage if it exists there (for backup)
+                                await syncService.deleteLocalItem(id);
+
+                                // Get counts after deletion
+                                const localItemsAfter = await syncService.getItems();
+                                const totalItemsAfter = menuItems.length - 1;
+
+                                console.log('🎯 DELETION COMPLETE - SERVER:');
+                                console.log('   UI Items:', totalItemsAfter, `(-1)`);
+                                console.log('   Local Storage:', localItemsAfter.length, `(-${localItemsBefore.length - localItemsAfter.length})`);
+
+                                Alert.alert(
+                                    'Success',
+                                    `Item deleted successfully from server\n\nRemaining: ${totalItemsAfter} items in list\nLocal storage: ${localItemsAfter.length} items`
+                                );
+                            } else {
+                                Alert.alert('Error', 'Failed to delete item from server');
+                            }
+                        } catch (error) {
+                            console.error('❌ Error deleting item:', error);
+                            Alert.alert('Error', 'Failed to delete item');
+                        } finally {
+                            setLoading(false);
+                        }
                     }
                 }
             ]
         );
     };
+    const toggleStatus = async (id: string) => {
+        try {
+            const API_BASE_URL = await getApiBaseUrl();
+            if (API_BASE_URL === 'demo' || !isOnlineMode) {
+                // OFFLINE MODE: Update local state only
+                setMenuItems(prev => prev.map(item =>
+                    item.id === id ? { ...item, status: !item.status } : item
+                ));
+                return;
+            }
 
-    const toggleStatus = (id: string) => {
-        setMenuItems(prev => prev.map(item =>
-            item.id === id ? { ...item, status: !item.status } : item
-        ));
+            // ONLINE MODE: Update server
+            const item = menuItems.find(item => item.id === id);
+            const response = await fetch(`${API_BASE_URL}/items.php`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    id: id,
+                    status: !item?.status
+                }),
+            });
+
+            const result = await response.json();
+
+            if (result.success) {
+                setMenuItems(prev => prev.map(item =>
+                    item.id === id ? { ...item, status: !item.status } : item
+                ));
+            }
+        } catch (error) {
+            console.error('Error updating status:', error);
+        }
     };
 
     return (
@@ -82,6 +323,9 @@ export default function ItemsScreen() {
                 resizeMode="cover"
             >
                 <ThemedView style={styles.content}>
+                    {/* Mode Indicator */}
+
+
                     {/* Sidebar */}
                     <ThemedView style={styles.sidebar}>
                         <ThemedView style={styles.sidebarHeader}>
@@ -133,12 +377,22 @@ export default function ItemsScreen() {
                     <ThemedView style={styles.mainContent}>
                         {/* Header Section */}
                         <ThemedView style={styles.headerSection}>
-                            <ThemedText style={styles.mainTitle}>Food Items</ThemedText>
+                            <ThemedView>
+                                <ThemedText style={styles.mainTitle}>Food Items</ThemedText>
+                                <ThemedText style={styles.modeInfo}>
+                                    {isOnlineMode
+                                        ? 'Connected to server'
+                                        : 'Using local storage'
+                                    }
+                                </ThemedText>
+                            </ThemedView>
 
                             <ThemedView style={styles.headerActions}>
-                                <TouchableOpacity style={styles.addNewButton} onPress={addNewItem}>
+                                <TouchableOpacity style={styles.addNewButton} onPress={handleAddNewItem} disabled={loading}>
                                     <Feather name="plus" size={16} color="#FFFEEA" />
-                                    <ThemedText style={styles.addNewButtonText}>Add New</ThemedText>
+                                    <ThemedText style={styles.addNewButtonText}>
+                                        {loading ? 'Loading...' : 'Add New'}
+                                    </ThemedText>
                                 </TouchableOpacity>
 
                                 <ThemedView style={styles.searchContainer}>
@@ -159,50 +413,62 @@ export default function ItemsScreen() {
                                 <ThemedText style={[styles.headerText, styles.codeHeader]}>Code</ThemedText>
                                 <ThemedText style={[styles.headerText, styles.nameHeader]}>Item Name</ThemedText>
                                 <ThemedText style={[styles.headerText, styles.categoryHeader]}>Category</ThemedText>
-                                <ThemedText style={[styles.headerText, styles.optionsHeader]}>Options</ThemedText>
+                                <ThemedText style={[styles.headerText, styles.stocksHeader]}>Stocks</ThemedText>
                                 <ThemedText style={[styles.headerText, styles.priceHeader]}>Price</ThemedText>
                                 <ThemedText style={[styles.headerText, styles.salesHeader]}>Sales</ThemedText>
                                 <ThemedText style={[styles.headerText, styles.actionsHeader]}>Actions</ThemedText>
                             </ThemedView>
 
                             <ScrollView style={styles.tableContent}>
-                                {paginatedItems.map((item) => (
-                                    <ThemedView key={item.id} style={styles.tableRow}>
-                                        <ThemedText style={[styles.cellText, styles.codeCell]}>{item.code}</ThemedText>
-                                        <ThemedText style={[styles.cellText, styles.nameCell]}>{item.name}</ThemedText>
-                                        <ThemedText style={[styles.cellText, styles.categoryCell]}>{item.category}</ThemedText>
-                                        <ThemedText style={[styles.cellText, styles.optionsCell]}>{item.options}</ThemedText>
-                                        <ThemedText style={[styles.cellText, styles.priceCell]}>${item.price.toFixed(2)}</ThemedText>
-                                        <ThemedText style={[styles.cellText, styles.salesCell]}>{item.sales}</ThemedText>
-                                        <ThemedView style={styles.actionsCell}>
-                                            <TouchableOpacity
-                                                style={[
-                                                    styles.statusButton,
-                                                    item.status ? styles.statusActive : styles.statusInactive
-                                                ]}
-                                                onPress={() => toggleStatus(item.id)}
-                                            >
-                                                <Feather
-                                                    name={item.status ? "check" : "x"}
-                                                    size={16}
-                                                    color={item.status ? "#16A34A" : "#DC2626"}
-                                                />
-                                            </TouchableOpacity>
-                                            <TouchableOpacity
-                                                style={styles.editButton}
-                                                onPress={() => console.log('Edit', item.id)}
-                                            >
-                                                <Feather name="edit-2" size={16} color="#874E3B" />
-                                            </TouchableOpacity>
-                                            <TouchableOpacity
-                                                style={styles.deleteButton}
-                                                onPress={() => deleteItem(item.id)}
-                                            >
-                                                <Feather name="trash-2" size={16} color="#DC2626" />
-                                            </TouchableOpacity>
-                                        </ThemedView>
+                                {loading ? (
+                                    <ThemedView style={styles.loadingContainer}>
+                                        <ThemedText>Loading items...</ThemedText>
                                     </ThemedView>
-                                ))}
+                                ) : paginatedItems.length === 0 ? (
+                                    <ThemedView style={styles.emptyContainer}>
+                                        <ThemedText>No items found</ThemedText>
+                                    </ThemedView>
+                                ) : (
+                                    paginatedItems.map((item) => (
+                                        <ThemedView key={item.id} style={styles.tableRow}>
+                                            <ThemedText style={[styles.cellText, styles.codeCell]}>
+                                                {item.code} {item.isOffline && '📱'}
+                                            </ThemedText>
+                                            <ThemedText style={[styles.cellText, styles.nameCell]}>{item.name}</ThemedText>
+                                            <ThemedText style={[styles.cellText, styles.categoryCell]}>{item.category}</ThemedText>
+                                            <ThemedText style={[styles.cellText, styles.stocksCell]}>{item.stocks}</ThemedText>
+                                            <ThemedText style={[styles.cellText, styles.priceCell]}>${item.price.toFixed(2)}</ThemedText>
+                                            <ThemedText style={[styles.cellText, styles.salesCell]}>{item.sales}</ThemedText>
+                                            <ThemedView style={styles.actionsCell}>
+                                                <TouchableOpacity
+                                                    style={[
+                                                        styles.statusButton,
+                                                        item.status ? styles.statusActive : styles.statusInactive
+                                                    ]}
+                                                    onPress={() => toggleStatus(item.id)}
+                                                >
+                                                    <Feather
+                                                        name={item.status ? "check" : "x"}
+                                                        size={16}
+                                                        color={item.status ? "#16A34A" : "#DC2626"}
+                                                    />
+                                                </TouchableOpacity>
+                                                <TouchableOpacity
+                                                    style={styles.editButton}
+                                                    onPress={() => console.log('Edit', item.id)}
+                                                >
+                                                    <Feather name="edit-2" size={16} color="#874E3B" />
+                                                </TouchableOpacity>
+                                                <TouchableOpacity
+                                                    style={styles.deleteButton}
+                                                    onPress={() => deleteItem(item.id)}
+                                                >
+                                                    <Feather name="trash-2" size={16} color="#DC2626" />
+                                                </TouchableOpacity>
+                                            </ThemedView>
+                                        </ThemedView>
+                                    ))
+                                )}
                             </ScrollView>
 
                             {/* Table Footer with Pagination */}
@@ -286,6 +552,36 @@ const styles = StyleSheet.create({
         padding: 16,
         backgroundColor: 'transparent',
     },
+    // ADD MODE INDICATOR STYLES
+    modeIndicatorContainer: {
+        position: 'absolute',
+        top: 10,
+        right: 10,
+        zIndex: 1000,
+        backgroundColor: 'rgba(255, 254, 234, 0.9)',
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 20,
+        borderWidth: 2,
+    },
+    modeText: {
+        fontSize: 12,
+        fontWeight: 'bold',
+    },
+    onlineModeText: {
+        color: '#16A34A',
+        borderColor: '#16A34A',
+    },
+    offlineModeText: {
+        color: '#DC2626',
+        borderColor: '#DC2626',
+    },
+    modeInfo: {
+        fontSize: 12,
+        color: '#874E3B',
+        fontStyle: 'italic',
+        marginTop: 4,
+    },
     sidebar: {
         width: 200,
         backgroundColor: "rgba(255, 254, 234, 0.95)",
@@ -300,11 +596,11 @@ const styles = StyleSheet.create({
         paddingBottom: 16,
         borderBottomWidth: 1,
         borderBottomColor: '#E8D8C8',
+        backgroundColor: "rgba(255, 254, 234, 0.95)",
         marginBottom: 8,
     },
     sidebarTitle: {
         fontSize: 16,
-        fontWeight: 'bold',
         color: '#874E3B',
         fontFamily: 'LobsterTwoRegular',
     },
@@ -330,28 +626,29 @@ const styles = StyleSheet.create({
     },
     mainContent: {
         flex: 1,
+        borderRadius: 12,
     },
     headerSection: {
         backgroundColor: "rgba(255, 254, 234, 0.95)",
         borderRadius: 12,
-        padding: 20,
+        padding: 5,
         borderWidth: 1,
         borderColor: '#D4A574',
-        marginBottom: 16,
+        marginBottom: 10,
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
     },
     mainTitle: {
         fontSize: 28,
-        fontWeight: 'bold',
         color: '#874E3B',
-        fontFamily: 'LobsterTwoRegular',
+        fontFamily: 'LobsterTwoItalic',
     },
     headerActions: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: 16,
+        backgroundColor: "rgba(255, 254, 234, 0.95)",
     },
     addNewButton: {
         flexDirection: 'row',
@@ -376,7 +673,7 @@ const styles = StyleSheet.create({
         borderRadius: 8,
         paddingHorizontal: 12,
         paddingVertical: 8,
-        minWidth: 200,
+        minWidth: 250,
     },
     searchIcon: {
         marginRight: 8,
@@ -388,9 +685,10 @@ const styles = StyleSheet.create({
     },
     tableSection: {
         flex: 1,
-        backgroundColor: "rgba(255, 254, 234, 0.95)",
+        backgroundColor: "rgba(255, 254, 250, 0.95)",
         borderRadius: 12,
         borderWidth: 1,
+        borderBottomLeftRadius: 12,
         borderColor: '#D4A574',
         overflow: 'hidden',
     },
@@ -420,7 +718,7 @@ const styles = StyleSheet.create({
         flex: 1.5,
         textAlign: 'center',
     },
-    optionsHeader: {
+    stocksHeader: {
         flex: 1,
         textAlign: 'center',
     },
@@ -446,7 +744,7 @@ const styles = StyleSheet.create({
         paddingHorizontal: 8,
         borderBottomWidth: 1,
         borderBottomColor: '#E8D8C8',
-        backgroundColor: '#F9F5F0',
+        backgroundColor: "rgba(255, 254, 234, 0.95)",
     },
     cellText: {
         fontSize: 13,
@@ -467,9 +765,10 @@ const styles = StyleSheet.create({
         flex: 1.5,
         textAlign: 'center',
     },
-    optionsCell: {
+    stocksCell: {
         flex: 1,
         textAlign: 'center',
+        fontWeight: 'bold',
     },
     priceCell: {
         flex: 1,
@@ -545,10 +844,12 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 24,
+        backgroundColor: '#F5E6D3',
     },
     itemsPerPage: {
         flexDirection: 'row',
         alignItems: 'center',
+        backgroundColor: '#F5E6D3',
         gap: 8,
     },
     paginationText: {
@@ -575,6 +876,7 @@ const styles = StyleSheet.create({
     pageNavigation: {
         flexDirection: 'row',
         alignItems: 'center',
+        backgroundColor: '#F5E6D3',
         gap: 8,
     },
     pageButton: {
@@ -617,5 +919,13 @@ const styles = StyleSheet.create({
         fontSize: 14,
         color: '#5A3921',
         fontWeight: '500',
+    },
+    loadingContainer: {
+        padding: 20,
+        alignItems: 'center',
+    },
+    emptyContainer: {
+        padding: 20,
+        alignItems: 'center',
     },
 });

@@ -1,42 +1,221 @@
 // app/(tabs)/pos.tsx
-import { useState } from 'react';
-import { StyleSheet, ScrollView, TextInput, TouchableOpacity, ImageBackground, Alert } from 'react-native';
+import { useState, useEffect } from 'react';
+import {
+    StyleSheet,
+    ScrollView,
+    TextInput,
+    TouchableOpacity,
+    ImageBackground,
+    Alert,
+    Image
+} from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Feather } from "@expo/vector-icons";
 import Navbar from '@/components/Navbar';
+import { NetworkScanner } from '@/lib/network-scanner';
+import { useFocusEffect } from '@react-navigation/native';
+import React from 'react';
+import { OfflineSyncService } from '@/lib/offline-sync';
 
 interface MenuItem {
     id: string;
+    code: string;
     name: string;
     price: number;
     quantity: number;
     category: string;
+    stocks: number;
+    status: boolean;
+    image?: string | any;
+    isOffline?: boolean;
+}
+
+interface Category {
+    name: string;
+    icon: string;
+}
+
+interface ApiMenuItem {
+    id: number | string;
+    code: string;
+    name: string;
+    price: string | number;
+    category: string;
+    stocks: string | number;
+    sales: string | number;
+    status: string | number | boolean;
+    description?: string;
+    image?: string | null;
+    created_at?: string;
+    updated_at?: string;
 }
 
 export default function PosScreen() {
     const [searchQuery, setSearchQuery] = useState('');
     const [cart, setCart] = useState<MenuItem[]>([]);
+    const [selectedCategory, setSelectedCategory] = useState<string>('All');
+    const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
+    const [loading, setLoading] = useState(false);
+    const [apiBaseUrl, setApiBaseUrl] = useState<string>('');
+    const [isOnlineMode, setIsOnlineMode] = useState<boolean>(false);
 
-    const menuItems: MenuItem[] = [
-        { id: '1', name: 'Veg Cheese Burger', price: 6.50, quantity: 0, category: 'FastFood' },
-        { id: '2', name: 'White Source Pasta', price: 10.00, quantity: 0, category: 'Pasta' },
-        { id: '3', name: 'Farm Ville Pizza', price: 12.00, quantity: 0, category: 'Pizza' },
-        { id: '4', name: 'Cheese Burst Sandwich', price: 8.00, quantity: 0, category: 'Sandwich' },
-        { id: '5', name: 'Chicken Sandwich', price: 7.50, quantity: 0, category: 'Sandwich' },
-        { id: '6', name: 'Margherita Pizza', price: 11.00, quantity: 0, category: 'Pizza' },
-        { id: '7', name: 'Beef Burger', price: 8.50, quantity: 0, category: 'FastFood' },
-        { id: '8', name: 'Carbonara Pasta', price: 9.50, quantity: 0, category: 'Pasta' },
+    // Function to get dynamic API URL
+    const getApiBaseUrl = async (): Promise<string> => {
+        try {
+            const serverIP = await NetworkScanner.findServerIP();
+
+            if (serverIP === 'demo') {
+                console.log('🔄 POS Running in demo mode');
+                setIsOnlineMode(false);
+                return 'demo';
+            }
+
+            const baseUrl = `http://${serverIP}/backend/api`;
+            console.log(`🌐 POS Using server: ${baseUrl}`);
+            setIsOnlineMode(true);
+            return baseUrl;
+
+        } catch (error) {
+            console.log('❌ POS Error detecting server, using offline mode');
+            setIsOnlineMode(false);
+            return 'demo';
+        }
+    };
+
+    // Demo data for POS with images
+    const demoData: MenuItem[] = [
+        {
+            id: '1',
+            code: '18754',
+            name: 'Cheese Burst Sandwich',
+            price: 12.00,
+            category: 'Sandwich',
+            stocks: 50,
+            quantity: 0,
+            status: true,
+            image: require('@/assets/images/kape1.png')
+        }
     ];
 
+    // Define categories with icons
+    const categories: Category[] = [
+        { name: 'All', icon: 'grid' },
+        { name: 'Fast Food', icon: 'coffee' },
+        { name: 'Pizza', icon: 'pie-chart' },
+        { name: 'Pasta', icon: 'wind' },
+        { name: 'Sandwich', icon: 'layers' },
+        { name: 'Beverages', icon: 'droplet' },
+        { name: 'Dessert', icon: 'star' },
+        { name: 'Main Course', icon: 'book-open' },
+    ];
+
+    // Load menu items - SEPARATE LOGIC FOR ONLINE vs OFFLINE
+    const loadMenuItems = async () => {
+        setLoading(true);
+        try {
+            const syncService = OfflineSyncService.getInstance();
+            const API_BASE_URL = await getApiBaseUrl();
+            setApiBaseUrl(API_BASE_URL);
+
+            if (API_BASE_URL === 'demo') {
+                console.log('📱 POS Loading OFFLINE data (demo + local storage)...');
+
+                // OFFLINE MODE: Show ONLY local storage items + demo data
+                const offlineItems = await syncService.getItems();
+                const allOfflineItems = [...demoData, ...offlineItems];
+
+                // Convert for POS use
+                const posItems: MenuItem[] = allOfflineItems.map(item => ({
+                    ...item,
+                    quantity: 0,
+                    stocks: Number(item.stocks || 0),
+                    status: item.status === true || item.status === '1' || item.status === 1,
+                    isOffline: true // Mark all as offline
+                }));
+
+                setMenuItems(posItems);
+                console.log('✅ POS Loaded OFFLINE items:', posItems.length, 'items');
+                return;
+            }
+
+            console.log('🔗 POS Fetching from SERVER (ONLINE MODE)...');
+            const response = await fetch(`${API_BASE_URL}/items.php`);
+
+            if (!response.ok) throw new Error('HTTP error');
+
+            const data: ApiMenuItem[] = await response.json();
+            console.log('📦 POS Server data received:', data.length, 'items');
+
+            // ONLINE MODE: Show ONLY server items (no local storage items)
+            const serverItems: MenuItem[] = data
+                .filter((item: ApiMenuItem) =>
+                    item.status === '1' || item.status === 1 || item.status === true
+                )
+                .map((item: ApiMenuItem) => ({
+                    id: String(item.id),
+                    code: String(item.code),
+                    name: String(item.name),
+                    price: Number(item.price),
+                    category: String(item.category),
+                    stocks: Number(item.stocks || 0),
+                    quantity: 0,
+                    status: true,
+                    image: item.image || undefined,
+                    isOffline: false // Mark as online
+                }));
+
+            setMenuItems(serverItems);
+            console.log('✅ POS Loaded ONLINE items:', serverItems.length, 'active server items');
+
+        } catch (error) {
+            console.error('❌ POS Error loading items:', error);
+
+            // Fallback to OFFLINE mode on error
+            const syncService = OfflineSyncService.getInstance();
+            const offlineItems = await syncService.getItems();
+            const offlinePosItems: MenuItem[] = offlineItems.map(item => ({
+                ...item,
+                quantity: 0,
+                stocks: Number(item.stocks || 0),
+                status: item.status === true || item.status === '1' || item.status === 1,
+                isOffline: true
+            }));
+
+            setMenuItems([...demoData, ...offlinePosItems]);
+            setIsOnlineMode(false);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useFocusEffect(
+        React.useCallback(() => {
+            loadMenuItems();
+        }, [])
+    );
+
+    // Filter items based on search and category, and only show active items with stocks > 0
     const filteredItems = menuItems.filter(item =>
-        item.name.toLowerCase().includes(searchQuery.toLowerCase())
+        item.name.toLowerCase().includes(searchQuery.toLowerCase()) &&
+        (selectedCategory === 'All' || item.category === selectedCategory) &&
+        item.status === true && // Only active items
+        item.stocks > 0 // Only items with available stocks
     );
 
     const subtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
     const total = subtotal;
 
     const addToCart = (item: MenuItem) => {
+        // Check if item has available stocks
+        const currentStock = menuItems.find(menuItem => menuItem.id === item.id)?.stocks || 0;
+        const currentInCart = cart.find(cartItem => cartItem.id === item.id)?.quantity || 0;
+
+        if (currentInCart >= currentStock) {
+            Alert.alert('Out of Stock', `No more ${item.name} available!`);
+            return;
+        }
+
         setCart(prev => {
             const existing = prev.find(cartItem => cartItem.id === item.id);
             if (existing) {
@@ -59,6 +238,14 @@ export default function PosScreen() {
             removeFromCart(id);
             return;
         }
+
+        // Check stock availability
+        const currentStock = menuItems.find(menuItem => menuItem.id === id)?.stocks || 0;
+        if (newQuantity > currentStock) {
+            Alert.alert('Out of Stock', 'Not enough stock available!');
+            return;
+        }
+
         setCart(prev => prev.map(item =>
             item.id === id ? { ...item, quantity: newQuantity } : item
         ));
@@ -68,13 +255,215 @@ export default function PosScreen() {
         setCart([]);
     };
 
-    const placeOrder = () => {
+    const placeOrder = async () => {
         if (cart.length === 0) {
             Alert.alert('Empty Cart', 'Please add items to cart first!');
             return;
         }
-        Alert.alert('Order Placed', 'Your order has been placed successfully!');
-        clearCart();
+
+        setLoading(true);
+        try {
+            const syncService = OfflineSyncService.getInstance();
+            const API_BASE_URL = await getApiBaseUrl();
+
+            if (API_BASE_URL === 'demo' || !isOnlineMode) {
+                // OFFLINE MODE: Update local storage only
+                console.log('📱 OFFLINE ORDER - Updating local stocks...');
+
+                setMenuItems(prev => prev.map(menuItem => {
+                    const cartItem = cart.find(item => item.id === menuItem.id);
+                    if (cartItem) {
+                        return {
+                            ...menuItem,
+                            stocks: menuItem.stocks - cartItem.quantity
+                        };
+                    }
+                    return menuItem;
+                }));
+
+                Alert.alert('Order Placed (Offline)', 'Your order has been placed successfully! Stocks updated locally.');
+                clearCart();
+                return;
+            }
+
+            // ONLINE MODE: Update server database
+            console.log('🌐 ONLINE ORDER - Updating server stocks...');
+
+            for (const cartItem of cart) {
+                const currentItem = menuItems.find(item => item.id === cartItem.id);
+                if (currentItem && !currentItem.isOffline) {
+                    const newStocks = currentItem.stocks - cartItem.quantity;
+                    const newSales = (currentItem as any).sales + cartItem.quantity || cartItem.quantity;
+
+                    const response = await fetch(`${API_BASE_URL}/items.php`, {
+                        method: 'PUT',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            id: cartItem.id,
+                            stocks: newStocks,
+                            sales: newSales
+                        }),
+                    });
+
+                    const result = await response.json();
+                    if (!result.success) {
+                        console.error('Failed to update server item:', cartItem.id);
+                    }
+                }
+            }
+
+            // Reload menu items to get updated stocks from server
+            await loadMenuItems();
+
+            Alert.alert('Order Placed (Online)', 'Your order has been placed successfully! Stocks updated on server.');
+            clearCart();
+        } catch (error) {
+            console.error('Error placing order:', error);
+            Alert.alert('Error', 'Failed to place order. Please try again.');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // Function to get image source
+    const getImageSource = (item: MenuItem) => {
+        if (!item.image) return null;
+
+        if (typeof item.image === 'string') {
+            // Network image from database
+            if (apiBaseUrl === 'demo' || item.isOffline) {
+                return null; // No network images in offline mode
+            }
+            const serverIP = apiBaseUrl.replace('http://', '').replace('/backend/api', '');
+            return { uri: `http://${serverIP}/backend/uploads/${item.image}` };
+        } else {
+            // Local image from demo data
+            return item.image;
+        }
+    };
+
+    // Function to render menu items in proper order
+    const renderMenuItems = () => {
+        if (loading) {
+            return (
+                <ThemedView style={styles.loadingContainer}>
+                    <ThemedText>Loading menu items...</ThemedText>
+                </ThemedView>
+            );
+        }
+
+        const items = [];
+        for (let i = 0; i < filteredItems.length; i += 4) {
+            const rowItems = filteredItems.slice(i, i + 4);
+            items.push(
+                <ThemedView key={`row-${i}`} style={styles.menuRow}>
+                    {rowItems.map((item) => {
+                        const imageSource = getImageSource(item);
+
+                        return (
+                            <TouchableOpacity
+                                key={item.id}
+                                style={styles.menuCard}
+                                onPress={() => addToCart(item)}
+                                disabled={item.stocks === 0}
+                            >
+                                {/* IMAGE BACKGROUND */}
+                                <ThemedView style={styles.imageContainer}>
+                                    {imageSource ? (
+                                        <Image
+                                            source={imageSource}
+                                            style={styles.itemImage}
+                                            resizeMode="cover"
+                                        />
+                                    ) : (
+                                        <ThemedView style={styles.imagePlaceholder}>
+                                            <Feather name="image" size={24} color="#D4A574" />
+                                        </ThemedView>
+                                    )}
+                                    {/* OVERLAY FOR TEXT READABILITY */}
+                                    <ThemedView style={styles.imageOverlay} />
+                                </ThemedView>
+
+                                {/* TEXT CONTENT */}
+                                <ThemedView style={styles.cardContent}>
+                                    <ThemedView style={styles.cardText}>
+                                        <ThemedText style={styles.itemName} numberOfLines={2}>
+                                            {item.name}
+                                        </ThemedText>
+                                        <ThemedText style={styles.itemCategory}>
+                                            {item.category}
+                                        </ThemedText>
+                                        <ThemedText style={styles.itemCode}>
+                                            Code: {item.code}
+                                        </ThemedText>
+                                        <ThemedText style={[
+                                            styles.itemStock,
+                                            item.stocks === 0 ? styles.outOfStock : styles.inStock
+                                        ]}>
+                                            Stock: {item.stocks}
+                                        </ThemedText>
+                                        {/* Show mode indicator */}
+                                        <ThemedText style={[
+                                            styles.modeIndicator,
+                                            item.isOffline ? styles.offlineMode : styles.onlineMode
+                                        ]}>
+                                            {item.isOffline ? '📱 Offline' : '🌐 Online'}
+                                        </ThemedText>
+                                    </ThemedView>
+                                    <ThemedView style={styles.bottomRow}>
+                                        <ThemedText style={styles.itemPrice}>
+                                            ${item.price.toFixed(2)}
+                                        </ThemedText>
+                                        <TouchableOpacity
+                                            style={[
+                                                styles.addButton,
+                                                item.stocks === 0 && styles.addButtonDisabled
+                                            ]}
+                                            onPress={(e) => {
+                                                e.stopPropagation();
+                                                addToCart(item);
+                                            }}
+                                            disabled={item.stocks === 0}
+                                        >
+                                            <Feather
+                                                name="plus"
+                                                size={14}
+                                                color={item.stocks === 0 ? "#9CA3AF" : "#FFFEEA"}
+                                            />
+                                        </TouchableOpacity>
+                                    </ThemedView>
+                                </ThemedView>
+                            </TouchableOpacity>
+                        );
+                    })}
+                    {/* Add empty cards to fill the row if needed */}
+                    {rowItems.length < 4 &&
+                        Array.from({ length: 4 - rowItems.length }).map((_, index) => (
+                            <ThemedView key={`empty-${i}-${index}`} style={styles.emptyCard} />
+                        ))
+                    }
+                </ThemedView>
+            );
+        }
+
+        if (items.length === 0 && !loading) {
+            return (
+                <ThemedView style={styles.emptyMenuContainer}>
+                    <Feather name="package" size={48} color="#D4A574" />
+                    <ThemedText style={styles.emptyMenuText}>No items found</ThemedText>
+                    <ThemedText style={styles.emptyMenuSubText}>
+                        {isOnlineMode
+                            ? 'No active items available on server'
+                            : 'No items available in local storage'
+                        }
+                    </ThemedText>
+                </ThemedView>
+            );
+        }
+
+        return items;
     };
 
     return (
@@ -89,9 +478,20 @@ export default function PosScreen() {
                 resizeMode="cover"
             >
                 <ThemedView style={styles.content}>
-                    {/* Left Side - Order Summary */}
+                    {/* Mode Indicator */}
+
+
+                    {/* Left Side - Order Summary (Smaller Width) */}
                     <ThemedView style={styles.orderSection}>
                         <ThemedText style={styles.sectionTitle}>Order Summary</ThemedText>
+
+                        {/* Mode info in order section */}
+                        <ThemedText style={styles.modeInfo}>
+                            {isOnlineMode
+                                ? 'Connected to server'
+                                : 'Using local storage'
+                            }
+                        </ThemedText>
 
                         {/* Table Header */}
                         <ThemedView style={styles.tableHeader}>
@@ -105,28 +505,30 @@ export default function PosScreen() {
                         <ScrollView style={styles.orderList}>
                             {cart.length === 0 ? (
                                 <ThemedView style={styles.emptyCart}>
-                                    <Feather name="shopping-cart" size={48} color="#D4A574" />
+                                    <Feather name="shopping-cart" size={36} color="#D4A574" />
                                     <ThemedText style={styles.emptyCartText}>No items in cart</ThemedText>
                                     <ThemedText style={styles.emptyCartSubText}>Tap on menu items to add them</ThemedText>
                                 </ThemedView>
                             ) : (
                                 cart.map((item) => (
                                     <ThemedView key={item.id} style={styles.orderRow}>
-                                        <ThemedText style={[styles.cellText, styles.itemCell]}>{item.name}</ThemedText>
+                                        <ThemedText style={[styles.cellText, styles.itemCell]} numberOfLines={1}>
+                                            {item.name} {item.isOffline && '📱'}
+                                        </ThemedText>
                                         <ThemedText style={[styles.cellText, styles.priceCell]}>${item.price.toFixed(2)}</ThemedText>
                                         <ThemedView style={styles.qtyCell}>
                                             <TouchableOpacity
                                                 style={styles.qtyButton}
                                                 onPress={() => updateQuantity(item.id, item.quantity - 1)}
                                             >
-                                                <Feather name="minus" size={14} color="#874E3B" />
+                                                <Feather name="minus" size={12} color="#874E3B" />
                                             </TouchableOpacity>
                                             <ThemedText style={styles.qtyText}>{item.quantity}</ThemedText>
                                             <TouchableOpacity
                                                 style={styles.qtyButton}
                                                 onPress={() => updateQuantity(item.id, item.quantity + 1)}
                                             >
-                                                <Feather name="plus" size={14} color="#874E3B" />
+                                                <Feather name="plus" size={12} color="#874E3B" />
                                             </TouchableOpacity>
                                         </ThemedView>
                                         <ThemedText style={[styles.cellText, styles.totalCell]}>
@@ -158,60 +560,74 @@ export default function PosScreen() {
                             <TouchableOpacity
                                 style={styles.cancelButton}
                                 onPress={clearCart}
+                                disabled={loading}
                             >
-                                <ThemedText style={styles.cancelButtonText}>Cancel</ThemedText>
+                                <ThemedText style={styles.cancelButtonText}>
+                                    {loading ? 'Processing...' : 'Cancel'}
+                                </ThemedText>
                             </TouchableOpacity>
                             <TouchableOpacity
-                                style={styles.placeOrderButton}
+                                style={[styles.placeOrderButton, loading && styles.placeOrderButtonDisabled]}
                                 onPress={placeOrder}
+                                disabled={loading || cart.length === 0}
                             >
-                                <ThemedText style={styles.placeOrderButtonText}>Place Order</ThemedText>
+                                <ThemedText style={styles.placeOrderButtonText}>
+                                    {loading ? 'Processing...' : 'Place Order'}
+                                </ThemedText>
                             </TouchableOpacity>
                         </ThemedView>
                     </ThemedView>
 
-                    {/* Right Side - Menu Items */}
+                    {/* Right Side - Menu Items (Larger Width) */}
                     <ThemedView style={styles.menuSection}>
+                        {/* Menu Header with Search */}
                         <ThemedView style={styles.menuHeader}>
-                            <ThemedText style={styles.sectionTitle}>Menu</ThemedText>
-                            <TextInput
-                                style={styles.searchInput}
-                                placeholder="Search Items"
-                                value={searchQuery}
-                                onChangeText={setSearchQuery}
-                            />
+                            <ThemedView style={styles.searchContainer}>
+                                <Feather name="search" size={18} color="#874E3B" style={styles.searchIcon} />
+                                <TextInput
+                                    style={styles.searchInput}
+                                    placeholder="Search Items"
+                                    value={searchQuery}
+                                    onChangeText={setSearchQuery}
+                                />
+                            </ThemedView>
                         </ThemedView>
 
+                        {/* Categories Section - Square Cards Only */}
+                        <ScrollView
+                            horizontal
+                            showsHorizontalScrollIndicator={false}
+                            style={styles.categoriesContainer}
+                            contentContainerStyle={styles.categoriesContent}
+                        >
+                            {categories.map((category) => (
+                                <TouchableOpacity
+                                    key={category.name}
+                                    style={[
+                                        styles.categoryCard,
+                                        selectedCategory === category.name && styles.categoryCardActive
+                                    ]}
+                                    onPress={() => setSelectedCategory(category.name)}
+                                >
+                                    <Feather
+                                        name={category.icon as any}
+                                        size={32}
+                                        color={selectedCategory === category.name ? '#FFFEEA' : '#874E3B'}
+                                        style={styles.categoryIcon}
+                                    />
+                                    <ThemedText style={[
+                                        styles.categoryName,
+                                        selectedCategory === category.name && styles.categoryNameActive
+                                    ]}>
+                                        {category.name}
+                                    </ThemedText>
+                                </TouchableOpacity>
+                            ))}
+                        </ScrollView>
+
+                        {/* Menu Items Grid - 4 squares per row IN ORDER */}
                         <ScrollView style={styles.menuList}>
-                            <ThemedView style={styles.menuGrid}>
-                                {filteredItems.map((item) => (
-                                    <TouchableOpacity
-                                        key={item.id}
-                                        style={styles.menuCard}
-                                        onPress={() => addToCart(item)}
-                                    >
-                                        <ThemedView style={styles.cardContent}>
-                                            <ThemedView style={styles.cardText}>
-                                                <ThemedText style={styles.itemName} numberOfLines={2}>
-                                                    {item.name}
-                                                </ThemedText>
-                                                <ThemedText style={styles.itemPrice}>
-                                                    ${item.price.toFixed(2)}
-                                                </ThemedText>
-                                            </ThemedView>
-                                            <TouchableOpacity
-                                                style={styles.deleteButton}
-                                                onPress={(e) => {
-                                                    e.stopPropagation();
-                                                    console.log('Delete', item.id);
-                                                }}
-                                            >
-                                                <Feather name="trash-2" size={18} color="#874E3B" />
-                                            </TouchableOpacity>
-                                        </ThemedView>
-                                    </TouchableOpacity>
-                                ))}
-                            </ThemedView>
+                            {renderMenuItems()}
                         </ScrollView>
                     </ThemedView>
                 </ThemedView>
@@ -236,10 +652,10 @@ const styles = StyleSheet.create({
         backgroundColor: 'transparent',
     },
     orderSection: {
-        flex: 1,
-        backgroundColor: "rgba(255, 254, 234, 0.95)",
+        width: '35%',
+        backgroundColor: "#fffecaF2",
         borderRadius: 12,
-        padding: 16,
+        padding: 12,
         borderWidth: 1,
         borderColor: '#D4A574',
     },
@@ -249,15 +665,15 @@ const styles = StyleSheet.create({
         borderColor: '#D4A574',
         borderRadius: 12,
         padding: 16,
-        backgroundColor: 'rgba(255, 255, 255, 0.95)',
+        backgroundColor: '#fffecaF2',
     },
     menuHeader: {
-        marginBottom: 16,
+        marginBottom: 12,
     },
     sectionTitle: {
-        fontSize: 20,
+        fontSize: 18,
         fontWeight: 'bold',
-        marginBottom: 16,
+        marginBottom: 12,
         textAlign: 'center',
         fontFamily: 'LobsterTwoRegular',
         color: '#874E3B',
@@ -268,83 +684,90 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         borderBottomWidth: 2,
         borderBottomColor: '#874E3B',
-        paddingBottom: 8,
-        marginBottom: 8,
+        paddingBottom: 6,
+        marginBottom: 6,
+        backgroundColor: "rgba(255, 254, 234, 0.95)",
     },
     headerText: {
         fontWeight: 'bold',
         color: '#874E3B',
-        fontSize: 14,
+        fontSize: 17,
     },
     itemHeader: {
-        flex: 3,
+        flex: 2.5,
         textAlign: 'left',
     },
     priceHeader: {
-        flex: 2,
+        flex: 1.5,
         textAlign: 'center',
     },
     qtyHeader: {
-        flex: 2,
+        flex: 1.5,
         textAlign: 'center',
     },
     totalHeader: {
-        flex: 2,
+        flex: 1.5,
         textAlign: 'right',
     },
     orderList: {
         flex: 1,
-        marginBottom: 16,
+        marginBottom: 12,
     },
     emptyCart: {
         flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
-        paddingVertical: 40,
+        paddingVertical: 43,
+        borderWidth: 1,
+        borderColor: '#D4A574',
+        borderRadius: 12,
+        backgroundColor: "rgba(255, 254, 234, 0.95)",
     },
     emptyCartText: {
-        fontSize: 18,
+        fontSize: 14,
         fontWeight: 'bold',
         color: '#874E3B',
-        marginTop: 16,
+        marginTop: 12,
         textAlign: 'center',
     },
     emptyCartSubText: {
-        fontSize: 14,
+        fontSize: 12,
         color: '#5A3921',
-        marginTop: 8,
+        marginTop: 6,
         textAlign: 'center',
     },
     orderRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingVertical: 8,
+        paddingVertical: 6,
         borderBottomWidth: 1,
         borderBottomColor: '#E8D8C8',
+        backgroundColor: "rgba(255, 254, 250, 0.95)",
     },
     cellText: {
-        fontSize: 13,
+        fontSize: 15,
         color: '#5A3921',
     },
     itemCell: {
-        flex: 3,
+        flex: 2.5,
         textAlign: 'left',
     },
     priceCell: {
-        flex: 2,
+        flex: 1.5,
         textAlign: 'center',
     },
     qtyCell: {
-        flex: 2,
+        flex: 1.5,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 8,
+        gap: 6,
+        backgroundColor: "rgba(255, 254, 250, 0.95)",
     },
     qtyButton: {
-        width: 24,
-        height: 24,
-        borderRadius: 12,
+        width: 20,
+        height: 20,
+        borderRadius: 10,
         backgroundColor: '#F5E6D3',
         justifyContent: 'center',
         alignItems: 'center',
@@ -352,140 +775,382 @@ const styles = StyleSheet.create({
         borderColor: '#D4A574',
     },
     qtyText: {
-        fontSize: 14,
+        fontSize: 12,
         fontWeight: 'bold',
         color: '#874E3B',
-        minWidth: 20,
+        minWidth: 16,
         textAlign: 'center',
     },
     totalCell: {
-        flex: 2,
+        flex: 1.5,
         textAlign: 'right',
         fontWeight: 'bold',
     },
     totalsSection: {
         borderTopWidth: 2,
         borderTopColor: '#874E3B',
-        paddingTop: 12,
-        marginBottom: 16,
+        paddingTop: 8,
+        marginBottom: 12,
     },
     totalRow: {
         flexDirection: 'row',
         justifyContent: 'space-between',
-        paddingVertical: 4,
+        paddingVertical: 3,
     },
     totalLabel: {
-        fontSize: 14,
+        fontSize: 16,
         color: '#5A3921',
     },
     totalValue: {
-        fontSize: 14,
+        fontSize: 16,
         color: '#5A3921',
         fontWeight: '500',
     },
     grandTotal: {
         borderTopWidth: 1,
         borderTopColor: '#D4A574',
-        paddingTop: 8,
-        marginTop: 4,
+        paddingTop: 6,
+        marginTop: 3,
     },
     grandTotalLabel: {
-        fontSize: 16,
+        fontSize: 18,
         fontWeight: 'bold',
         color: '#874E3B',
     },
     grandTotalValue: {
-        fontSize: 16,
+        fontSize: 20,
         fontWeight: 'bold',
         color: '#874E3B',
     },
     actionButtons: {
         flexDirection: 'row',
-        gap: 12,
+        gap: 8,
+        backgroundColor: "#fffecaF2",
     },
     cancelButton: {
         flex: 1,
         backgroundColor: '#E8D8C8',
-        paddingVertical: 12,
-        borderRadius: 8,
+        paddingVertical: 10,
+        borderRadius: 6,
         alignItems: 'center',
         borderWidth: 1,
         borderColor: '#D4A574',
     },
     cancelButtonText: {
         color: '#874E3B',
-        fontSize: 16,
+        fontSize: 14,
         fontWeight: 'bold',
     },
     placeOrderButton: {
         flex: 1,
         backgroundColor: '#874E3B',
-        paddingVertical: 12,
-        borderRadius: 8,
+        paddingVertical: 10,
+        borderRadius: 6,
         alignItems: 'center',
+    },
+    placeOrderButtonDisabled: {
+        backgroundColor: '#A8A29E',
     },
     placeOrderButtonText: {
         color: '#FFFEEA',
-        fontSize: 16,
+        fontSize: 14,
         fontWeight: 'bold',
     },
 
-    // MENU STYLES - SQUARE CARDS
-    searchInput: {
+    // SEARCH STYLES
+    searchContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: 'rgba(255, 254, 234, 0.95)',
         borderWidth: 1,
         borderColor: '#D4A574',
         borderRadius: 8,
-        padding: 12,
-        fontSize: 14,
-        backgroundColor: '#FFFFFF',
-        marginBottom: 8,
+        paddingHorizontal: 12,
+        paddingVertical: 8,
     },
+    searchIcon: {
+        marginRight: 8,
+    },
+    searchInput: {
+        flex: 1,
+        fontSize: 14,
+        color: '#5A3921',
+    },
+
+    // CATEGORIES STYLES
+    categoriesContainer: {
+        flexDirection: 'row',
+        marginBottom: 12,
+        maxHeight: 90,
+    },
+    categoriesContent: {
+        paddingVertical: 4,
+        gap: 12,
+    },
+    categoryCard: {
+        width: 80,
+        height: 80,
+        backgroundColor: '#F5E6D3',
+        borderRadius: 12,
+        borderWidth: 2,
+        borderColor: '#D4A574',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 8,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 3,
+        elevation: 3,
+    },
+    categoryCardActive: {
+        backgroundColor: '#874E3B',
+        borderColor: '#874E3B',
+        shadowColor: '#874E3B',
+        shadowOffset: { width: 0, height: 3 },
+        shadowOpacity: 0.3,
+        shadowRadius: 5,
+        elevation: 5,
+    },
+    categoryIcon: {
+        marginBottom: 6,
+    },
+    categoryName: {
+        fontSize: 12,
+        fontWeight: 'bold',
+        color: '#874E3B',
+        textAlign: 'center',
+    },
+    categoryNameActive: {
+        color: '#FFFEEA',
+        fontWeight: 'bold',
+    },
+
+    // MENU STYLES
     menuList: {
         flex: 1,
     },
-    menuGrid: {
+    menuRow: {
         flexDirection: 'row',
-        flexWrap: 'wrap',
-        gap: 12,
         justifyContent: 'space-between',
+        marginBottom: 8,
+        backgroundColor: "#fffecaF2",
     },
     menuCard: {
-        width: '48%',
+        width: '23%',
         aspectRatio: 1,
-        backgroundColor: '#F9F5F0',
-        borderRadius: 12,
+        backgroundColor: 'transparent',
+        borderRadius: 10,
         borderWidth: 1,
         borderColor: '#E8D8C8',
-        padding: 12,
+        padding: 8,
         justifyContent: 'space-between',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 3,
+        elevation: 3,
+        overflow: 'hidden',
     },
+    emptyCard: {
+        width: '23%',
+        aspectRatio: 1,
+        backgroundColor: 'transparent',
+    },
+
+    // IMAGE STYLES
+    imageContainer: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        borderRadius: 10,
+        overflow: 'hidden',
+    },
+    itemImage: {
+        width: '100%',
+        height: '100%',
+    },
+    imagePlaceholder: {
+        width: '100%',
+        height: '100%',
+        backgroundColor: '#F5E6D3',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    imageOverlay: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: 'rgba(0, 0, 0, 0.4)',// Walay overlay
+    },
+
+    // CARD CONTENT STYLES
     cardContent: {
         flex: 1,
         justifyContent: 'space-between',
+        zIndex: 1,
+        backgroundColor: 'transparent',
     },
     cardText: {
         flex: 1,
+        zIndex: 1,
+        backgroundColor: 'transparent',
     },
     itemName: {
-        fontSize: 16,
-        fontWeight: 'bold',
-        color: '#5A3921',
+        fontSize: 18,
+        fontFamily: 'LobsterTwoItalic',
+        color: '#FFFEEA', // light cream text
+        textShadowColor: 'rgba(0, 0, 0, 0.9)', // black shadow, high opacity
+        textShadowOffset: { width: 2, height: 2 }, // slight offset for depth
+        textShadowRadius: 4, // smaller for crisp shadow
+        shadowColor: 'rgba(0, 0, 0, 0.9)',// same orange outer shadow
+        shadowOffset: { width: 2, height: 2 },
+        shadowOpacity: 0.9,
+        shadowRadius: 8,
+        elevation: 10,
+        lineHeight: 40,
+    },
+    itemCategory: {
+        fontSize: 15,
+        color: '#F5E6D3',
+        fontWeight: '500',
+        marginBottom: 2,
         fontFamily: 'LobsterTwoRegular',
-        marginBottom: 8,
-        lineHeight: 20,
+        textShadowColor: 'rgba(0, 0, 0, 0.9)', // black shadow, high opacity
+        textShadowOffset: { width: 2, height: 2 }, // slight offset for depth
+        textShadowRadius: 4, // smaller for crisp shadow
+        shadowColor: 'rgba(0, 0, 0, 0.9)',
+    },
+    itemCode: {
+        fontSize: 8,
+        color: '#E8D8C8',
+        marginBottom: 2,
+        fontFamily: 'LobsterTwoRegular',
+        textShadowColor: 'rgba(0, 0, 0, 0.9)', // black shadow, high opacity
+        textShadowOffset: { width: 2, height: 2 }, // slight offset for depth
+        textShadowRadius: 4, // smaller for crisp shadow
+        shadowColor: 'rgba(0, 0, 0, 0.9)',
+    },
+    itemStock: {
+        fontSize: 8,
+        fontWeight: 'bold',
+        marginBottom: 4,
+        fontFamily: 'LobsterTwoRegular',
+        textShadowColor: 'rgba(0, 0, 0, 0.9)', // black shadow, high opacity
+        textShadowOffset: { width: 2, height: 2 }, // slight offset for depth
+        textShadowRadius: 4, // smaller for crisp shadow
+        shadowColor: 'rgba(0, 0, 0, 0.9)',
+    },
+    inStock: {
+        color: '#FFFEEA',
+    },
+    outOfStock: {
+        color: '#FECACA',
+    },
+    bottomRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'flex-end',
+        backgroundColor: 'transparent'
     },
     itemPrice: {
-        fontSize: 18,
+        fontSize: 14,
+        fontWeight: 'bold',
+        color: '#FFFEEA',
+        fontFamily: 'LobsterTwoRegular',
+        textShadowColor: 'rgba(0, 0, 0, 0.7)',
+        textShadowOffset: { width: 1, height: 1 },
+        textShadowRadius: 3,
+    },
+    addButton: {
+        width: 26,
+        height: 26,
+        borderRadius: 13,
+        backgroundColor: '#874E3B',
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#874E3B',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.2,
+        shadowRadius: 3,
+        elevation: 3,
+    },
+    addButtonDisabled: {
+        backgroundColor: '#D1D5DB',
+        borderColor: '#9CA3AF',
+    },
+
+    // LOADING AND EMPTY STATES
+    loadingContainer: {
+        padding: 20,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    emptyMenuContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        paddingVertical: 60,
+    },
+    emptyMenuText: {
+        fontSize: 16,
         fontWeight: 'bold',
         color: '#874E3B',
-        fontFamily: 'LobsterTwoRegular',
+        marginTop: 12,
+        textAlign: 'center',
     },
-    deleteButton: {
-        alignSelf: 'flex-end',
-        padding: 8,
-        borderRadius: 6,
-        backgroundColor: '#F5E6D3',
-        borderWidth: 1,
-        borderColor: '#D4A574',
+    emptyMenuSubText: {
+        fontSize: 14,
+        color: '#5A3921',
+        marginTop: 6,
+        textAlign: 'center',
+    },
+    // ADD THESE NEW STYLES FOR MODE INDICATORS:
+    modeIndicatorContainer: {
+        position: 'absolute',
+        top: 10,
+        right: 10,
+        zIndex: 1000,
+        backgroundColor: 'rgba(255, 254, 234, 0.9)',
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 20,
+        borderWidth: 2,
+    },
+    modeText: {
+        fontSize: 12,
+        fontWeight: 'bold',
+    },
+    onlineModeText: {
+        color: '#16A34A',
+        borderColor: '#16A34A',
+    },
+    offlineModeText: {
+        color: '#DC2626',
+        borderColor: '#DC2626',
+    },
+    modeInfo: {
+        fontSize: 12,
+        color: '#874E3B',
+        textAlign: 'center',
+        marginBottom: 8,
+        fontStyle: 'italic',
+    },
+    modeIndicator: {
+        fontSize: 10,
+        fontWeight: 'bold',
+        marginTop: 2,
+    },
+    onlineMode: {
+        color: '#16A34A',
+    },
+    offlineMode: {
+        color: '#DC2626',
     },
 });

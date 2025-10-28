@@ -2,6 +2,7 @@
 import * as SecureStore from 'expo-secure-store';
 import { NetworkScanner } from './network-scanner';
 import { Alert } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 interface PendingItem {
   id: string;
@@ -10,6 +11,14 @@ interface PendingItem {
   timestamp: number;
   retryCount: number;
   serverId?: string;
+}
+
+// ADD CUPITEM INTERFACE HERE
+interface CupItem {
+  id: string;
+  name: string;
+  stocks: number;
+  size?: string;
 }
 
 export interface SyncStatus {
@@ -420,6 +429,7 @@ export class OfflineSyncService {
       await SecureStore.deleteItemAsync('localItems');
       await SecureStore.deleteItemAsync('pendingItems');
       await SecureStore.deleteItemAsync('lastSync');
+      await SecureStore.deleteItemAsync('cups_data'); // ADD THIS FOR CUPS
       await this.updateSyncStatus({
         isSyncing: false,
         lastSync: null,
@@ -430,6 +440,7 @@ export class OfflineSyncService {
       console.error('❌ Error clearing local data:', error);
     }
   }
+
   async deleteLocalItem(itemId: string): Promise<boolean> {
     try {
         console.log('🗑️ Deleting item from local storage:', itemId);
@@ -463,6 +474,45 @@ export class OfflineSyncService {
         return true;
     } catch (error) {
         console.error('❌ Error deleting item from local storage:', error);
+        return false;
+    }
+  }
+
+  // ADD CUPS METHODS HERE - USING SECURESTORE
+  async saveCups(cups: CupItem[]): Promise<void> {
+    try {
+        await AsyncStorage.setItem('cups_data', JSON.stringify(cups));
+        console.log('💾 Cups saved to local storage:', cups.length, 'cups');
+    } catch (error) {
+        console.error('Error saving cups to local storage:', error);
+        throw error;
+    }
+}
+
+async getCups(): Promise<CupItem[]> {
+    try {
+        const cupsData = await AsyncStorage.getItem('cups_data');
+        if (cupsData) {
+            const cups = JSON.parse(cupsData);
+            console.log('📱 Cups loaded from local storage:', cups.length, 'cups');
+            return cups;
+        }
+        return [];
+    } catch (error) {
+        console.error('Error loading cups from local storage:', error);
+        return [];
+    }
+}
+
+async deleteLocalCup(id: string): Promise<boolean> {
+    try {
+        const currentCups = await this.getCups();
+        const updatedCups = currentCups.filter(cup => cup.id !== id);
+        await this.saveCups(updatedCups);
+        console.log('🗑️ Cup deleted from local storage:', id);
+        return true;
+    } catch (error) {
+        console.error('Error deleting cup from local storage:', error);
         return false;
     }
 }

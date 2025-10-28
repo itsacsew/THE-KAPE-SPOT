@@ -387,8 +387,31 @@ export default function PosScreen() {
                                 </ThemedView>
 
                                 {/* TEXT CONTENT */}
+
                                 <ThemedView style={styles.cardContent}>
                                     <ThemedView style={styles.cardText}>
+                                        {/* Mode Indicator - Messenger Style */}
+                                        <ThemedView style={[
+                                            styles.modeIndicatorContainer,
+                                            item.isOffline ? styles.sentMode : styles.deliveredMode
+                                        ]}>
+                                            <ThemedText style={styles.modeIconText}>
+                                                <Feather
+                                                    name="check"
+                                                    size={12}
+                                                    color={item.isOffline ? "#666" : "#FFF"}
+                                                />
+                                                {!item.isOffline && (
+                                                    <Feather
+                                                        name="check"
+                                                        size={12}
+                                                        color="#FFF"
+                                                        style={styles.deliveredCheck}
+                                                    />
+                                                )}
+                                            </ThemedText>
+                                        </ThemedView>
+
                                         <ThemedText style={styles.itemName} numberOfLines={2}>
                                             {item.name}
                                         </ThemedText>
@@ -404,17 +427,10 @@ export default function PosScreen() {
                                         ]}>
                                             Stock: {item.stocks}
                                         </ThemedText>
-                                        {/* Show mode indicator */}
-                                        <ThemedText style={[
-                                            styles.modeIndicator,
-                                            item.isOffline ? styles.offlineMode : styles.onlineMode
-                                        ]}>
-                                            {item.isOffline ? '📱 Offline' : '🌐 Online'}
-                                        </ThemedText>
                                     </ThemedView>
                                     <ThemedView style={styles.bottomRow}>
                                         <ThemedText style={styles.itemPrice}>
-                                            ${item.price.toFixed(2)}
+                                            ₱{item.price.toFixed(2)}
                                         </ThemedText>
                                         <TouchableOpacity
                                             style={[
@@ -427,11 +443,13 @@ export default function PosScreen() {
                                             }}
                                             disabled={item.stocks === 0}
                                         >
-                                            <Feather
-                                                name="plus"
-                                                size={14}
-                                                color={item.stocks === 0 ? "#9CA3AF" : "#FFFEEA"}
-                                            />
+                                            <ThemedText style={styles.addButtonText}>
+                                                <Feather
+                                                    name="plus"
+                                                    size={14}
+                                                    color={item.stocks === 0 ? "#9CA3AF" : "#FFFEEA"}
+                                                />
+                                            </ThemedText>
                                         </TouchableOpacity>
                                     </ThemedView>
                                 </ThemedView>
@@ -515,7 +533,7 @@ export default function PosScreen() {
                                         <ThemedText style={[styles.cellText, styles.itemCell]} numberOfLines={1}>
                                             {item.name} {item.isOffline && '📱'}
                                         </ThemedText>
-                                        <ThemedText style={[styles.cellText, styles.priceCell]}>${item.price.toFixed(2)}</ThemedText>
+                                        <ThemedText style={[styles.cellText, styles.priceCell]}>₱{item.price.toFixed(2)}</ThemedText>
                                         <ThemedView style={styles.qtyCell}>
                                             <TouchableOpacity
                                                 style={styles.qtyButton}
@@ -532,7 +550,7 @@ export default function PosScreen() {
                                             </TouchableOpacity>
                                         </ThemedView>
                                         <ThemedText style={[styles.cellText, styles.totalCell]}>
-                                            ${(item.price * item.quantity).toFixed(2)}
+                                            ₱{(item.price * item.quantity).toFixed(2)}
                                         </ThemedText>
                                     </ThemedView>
                                 ))
@@ -543,15 +561,15 @@ export default function PosScreen() {
                         <ThemedView style={styles.totalsSection}>
                             <ThemedView style={styles.totalRow}>
                                 <ThemedText style={styles.totalLabel}>Sub total</ThemedText>
-                                <ThemedText style={styles.totalValue}>${subtotal.toFixed(2)}</ThemedText>
+                                <ThemedText style={styles.totalValue}>₱{subtotal.toFixed(2)}</ThemedText>
                             </ThemedView>
                             <ThemedView style={styles.totalRow}>
                                 <ThemedText style={styles.totalLabel}>Other Charge</ThemedText>
-                                <ThemedText style={styles.totalValue}>$0.00</ThemedText>
+                                <ThemedText style={styles.totalValue}>₱0.00</ThemedText>
                             </ThemedView>
                             <ThemedView style={[styles.totalRow, styles.grandTotal]}>
                                 <ThemedText style={styles.grandTotalLabel}>Amount to Pay</ThemedText>
-                                <ThemedText style={styles.grandTotalValue}>${total.toFixed(2)}</ThemedText>
+                                <ThemedText style={styles.grandTotalValue}>₱{total.toFixed(2)}</ThemedText>
                             </ThemedView>
                         </ThemedView>
 
@@ -1112,16 +1130,39 @@ const styles = StyleSheet.create({
         textAlign: 'center',
     },
     // ADD THESE NEW STYLES FOR MODE INDICATORS:
+    // I-add dinhi sa styles section:
     modeIndicatorContainer: {
         position: 'absolute',
-        top: 10,
-        right: 10,
-        zIndex: 1000,
-        backgroundColor: 'rgba(255, 254, 234, 0.9)',
-        paddingHorizontal: 12,
-        paddingVertical: 6,
-        borderRadius: 20,
-        borderWidth: 2,
+        top: 4,
+        right: 4,
+        width: 20,
+        height: 20,
+        borderRadius: 10,
+        justifyContent: 'center',
+        alignItems: 'center',
+        zIndex: 10,
+    },
+    deliveredMode: {
+        backgroundColor: '#0084FF', // Messenger blue
+    },
+    sentMode: {
+        backgroundColor: 'transparent',
+        borderWidth: 1,
+        borderColor: '#666',
+    },
+    modeIconText: {
+        fontSize: 10,
+        fontWeight: 'bold',
+        color: '#FFF',
+        textAlign: 'center',
+        lineHeight: 18, // Important for vertical centering
+        marginTop: 1, // Fine-tune vertical position
+    },
+    deliveredCheck: {
+        color: '#666',
+    },
+    addButtonText: {
+        textAlign: 'center',
     },
     modeText: {
         fontSize: 12,

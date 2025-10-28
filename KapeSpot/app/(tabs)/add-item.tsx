@@ -51,7 +51,7 @@ export default function AddItemScreen() {
             // Hide navigation bar (bottom bar with home, back, etc.)
             await NavigationBar.setVisibilityAsync('hidden');
 
-            console.log('🔒 All bars hidden');
+
         } catch (error) {
             console.log('❌ Error hiding bars:', error);
         }

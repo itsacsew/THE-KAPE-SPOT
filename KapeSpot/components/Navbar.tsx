@@ -1,11 +1,22 @@
 // components/Navbar.tsx
-import { StyleSheet, ScrollView, TouchableOpacity, View } from 'react-native';
+import {
+    StyleSheet,
+    ScrollView,
+    TouchableOpacity,
+    View,
+    Alert,
+    Modal,
+    TouchableWithoutFeedback,
+    TextInput
+} from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Feather } from "@expo/vector-icons";
 import { useRouter, usePathname } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { OfflineSyncService } from '@/lib/offline-sync';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { NetworkScanner } from '@/lib/network-scanner';
 
 interface NavbarProps {
     activeNav?: string;
@@ -17,6 +28,14 @@ interface SyncStatus {
     pendingItems: number;
 }
 
+interface User {
+    id: string;
+    username: string;
+    password: string;
+    role: 'user' | 'admin';
+    name: string;
+}
+
 export default function Navbar({ activeNav }: NavbarProps) {
     const router = useRouter();
     const pathname = usePathname();
@@ -25,16 +44,43 @@ export default function Navbar({ activeNav }: NavbarProps) {
         lastSync: null,
         pendingItems: 0
     });
+    const [showAccountMenu, setShowAccountMenu] = useState(false);
+    const [showChangePassword, setShowChangePassword] = useState(false);
+    const [currentUser, setCurrentUser] = useState<User | null>(null);
+    const [currentPassword, setCurrentPassword] = useState('');
+    const [newPassword, setNewPassword] = useState('');
+    const [confirmPassword, setConfirmPassword] = useState('');
 
     // Determine active nav based on current route
     const currentActiveNav = activeNav || (pathname === '/pos' ? 'pos' :
-        pathname === '/items' ? 'items' : 'pos');
+        pathname === '/items' ? 'items' :
+            pathname === '/log' ? 'log' :
+                pathname === '/sales-expense' ? 'sales' :
+                    pathname === '/orderStatus' ? 'order-status' :
+                        pathname === '/settings' ? 'settings' : 'pos');
 
-    const navigateTo = (route: '/' | '/pos' | '/items' | '/sales-expense', nav: string) => {
+    const navigateTo = (route: '/' | '/pos' | '/items' | '/log' | '/sales-expense' | '/orderStatus' | '/settings', nav: string) => {
         if (route !== pathname) {
             router.push(route as any);
         }
     };
+
+    // Load current user data
+    useEffect(() => {
+        const loadCurrentUser = async () => {
+            try {
+                const syncService = OfflineSyncService.getInstance();
+                const userData = await syncService.getItem('currentUser');
+                if (userData) {
+                    setCurrentUser(JSON.parse(userData));
+                }
+            } catch (error) {
+                console.error('Error loading user data:', error);
+            }
+        };
+
+        loadCurrentUser();
+    }, []);
 
     useEffect(() => {
         const syncService = OfflineSyncService.getInstance();
@@ -67,6 +113,145 @@ export default function Navbar({ activeNav }: NavbarProps) {
         await syncService.manualSync();
     };
 
+    const handleAccountPress = () => {
+        setShowAccountMenu(!showAccountMenu);
+    };
+
+    const handleLogout = async () => {
+        Alert.alert(
+            'Logout',
+            'Are you sure you want to logout?',
+            [
+                {
+                    text: 'Cancel',
+                    style: 'cancel',
+                    onPress: () => setShowAccountMenu(false)
+                },
+                {
+                    text: 'Logout',
+                    style: 'destructive',
+                    onPress: async () => {
+                        try {
+                            // Use AsyncStorage directly to remove the currentUser
+                            await AsyncStorage.removeItem('currentUser');
+                            setCurrentUser(null);
+                            setShowAccountMenu(false);
+
+                            // Redirect to login screen
+                            router.replace('/login');
+
+                            Alert.alert('Logged Out', 'You have been successfully logged out.');
+                        } catch (error) {
+                            console.error('Logout error:', error);
+                            Alert.alert('Error', 'Failed to logout. Please try again.');
+                        }
+                    }
+                }
+            ]
+        );
+    };
+
+    const handleViewProfile = () => {
+        setShowAccountMenu(false);
+        Alert.alert(
+            'User Profile',
+            `Name: ${currentUser?.name || 'User'}\nUsername: ${currentUser?.username || 'username'}\nRole: ${currentUser?.role ? currentUser.role.toUpperCase() : 'Role'}`,
+            [{ text: 'OK' }]
+        );
+    };
+
+    const handleChangePassword = () => {
+        setShowAccountMenu(false);
+        setShowChangePassword(true);
+    };
+
+    const handleSavePassword = async () => {
+        if (!currentPassword || !newPassword || !confirmPassword) {
+            Alert.alert('Error', 'Please fill in all fields');
+            return;
+        }
+
+        if (newPassword !== confirmPassword) {
+            Alert.alert('Error', 'New passwords do not match');
+            return;
+        }
+
+        if (newPassword.length < 6) {
+            Alert.alert('Error', 'Password must be at least 6 characters long');
+            return;
+        }
+
+        try {
+            const syncService = OfflineSyncService.getInstance();
+            const userData = await syncService.getItem('currentUser');
+
+            if (!userData) {
+                Alert.alert('Error', 'User not found');
+                return;
+            }
+
+            const user = JSON.parse(userData);
+            const apiBaseUrl = await NetworkScanner.getApiBaseUrl();
+
+            if (apiBaseUrl === 'local') {
+                // Offline mode - save to local storage only
+                Alert.alert(
+                    'Offline Mode',
+                    'Cannot change password while offline. Please connect to the server to change your password.',
+                    [{ text: 'OK' }]
+                );
+                return;
+            }
+
+            // Online mode - send to server
+            const response = await fetch(`${apiBaseUrl}/users.php`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    action: 'change_password',
+                    user_id: user.id,
+                    current_password: currentPassword,
+                    new_password: newPassword
+                }),
+            });
+
+            const result = await response.json();
+
+            if (result.success) {
+                Alert.alert('Success', 'Password changed successfully');
+                setShowChangePassword(false);
+
+                // Clear password fields
+                setCurrentPassword('');
+                setNewPassword('');
+                setConfirmPassword('');
+
+                // Update local user data if needed
+                const updatedUser = { ...user, password: newPassword };
+                await syncService.setItem('currentUser', JSON.stringify(updatedUser));
+            } else {
+                Alert.alert('Error', result.message || 'Failed to change password');
+            }
+        } catch (error) {
+            console.error('Password change error:', error);
+            Alert.alert('Error', 'Failed to change password. Please try again.');
+        }
+    };
+
+    const handleClosePasswordModal = () => {
+        setShowChangePassword(false);
+        setCurrentPassword('');
+        setNewPassword('');
+        setConfirmPassword('');
+    };
+
+    // Close menu when clicking outside - using Modal's onRequestClose
+    const handleCloseMenu = () => {
+        setShowAccountMenu(false);
+    };
+
     return (
         <ThemedView style={styles.navbar}>
             <ThemedText style={styles.navbarTitle}>
@@ -79,9 +264,7 @@ export default function Navbar({ activeNav }: NavbarProps) {
                     showsHorizontalScrollIndicator={false}
                     style={styles.navbarScroll}
                     contentContainerStyle={styles.scrollContent}
-                >
-                </ScrollView>
-
+                ></ScrollView>
                 <TouchableOpacity
                     style={styles.navLink}
                     onPress={() => navigateTo('/pos', 'pos')}
@@ -122,21 +305,21 @@ export default function Navbar({ activeNav }: NavbarProps) {
 
                 <TouchableOpacity
                     style={styles.navLink}
-                    onPress={() => console.log('People clicked')}
+                    onPress={() => navigateTo('/log', 'log')}
                 >
                     <Feather
                         name="users"
                         size={20}
-                        color={currentActiveNav === 'people' ? '#FFFEEA' : '#FFFEEA'}
+                        color={currentActiveNav === 'log' ? '#FFFEEA' : '#FFFEEA'}
                         style={styles.navIcon}
                     />
                     <ThemedText style={[
                         styles.navLinkText,
-                        currentActiveNav === 'people' && styles.activeNavLinkText
+                        currentActiveNav === 'log' && styles.activeNavLinkText
                     ]}>
-                        People
+                        Log
                     </ThemedText>
-                    {currentActiveNav === 'people' && <ThemedView style={styles.activeIndicator} />}
+                    {currentActiveNav === 'log' && <ThemedView style={styles.activeIndicator} />}
                 </TouchableOpacity>
 
                 <TouchableOpacity
@@ -153,33 +336,14 @@ export default function Navbar({ activeNav }: NavbarProps) {
                         styles.navLinkText,
                         currentActiveNav === 'sales' && styles.activeNavLinkText
                     ]}>
-                        Sales & Expense
+                        Expenses
                     </ThemedText>
                     {currentActiveNav === 'sales' && <ThemedView style={styles.activeIndicator} />}
                 </TouchableOpacity>
 
                 <TouchableOpacity
                     style={styles.navLink}
-                    onPress={() => console.log('Settings clicked')}
-                >
-                    <Feather
-                        name="settings"
-                        size={20}
-                        color={currentActiveNav === 'settings' ? '#FFFEEA' : '#FFFEEA'}
-                        style={styles.navIcon}
-                    />
-                    <ThemedText style={[
-                        styles.navLinkText,
-                        currentActiveNav === 'settings' && styles.activeNavLinkText
-                    ]}>
-                        Settings
-                    </ThemedText>
-                    {currentActiveNav === 'settings' && <ThemedView style={styles.activeIndicator} />}
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                    style={styles.navLink}
-                    onPress={() => console.log('Order Status clicked')}
+                    onPress={() => navigateTo('/orderStatus', 'order-status')}
                 >
                     <Feather
                         name="clipboard"
@@ -195,6 +359,7 @@ export default function Navbar({ activeNav }: NavbarProps) {
                     </ThemedText>
                     {currentActiveNav === 'order-status' && <ThemedView style={styles.activeIndicator} />}
                 </TouchableOpacity>
+
 
                 {/* Sync Indicator */}
                 <TouchableOpacity
@@ -215,19 +380,157 @@ export default function Navbar({ activeNav }: NavbarProps) {
                     )}
                 </TouchableOpacity>
 
-                {/* Account Circle - Fixed on the right side */}
-                <TouchableOpacity
-                    style={styles.accountCircle}
-                    onPress={() => console.log('Account clicked')}
-                >
-                    <Feather
-                        name="user"
-                        size={20}
-                        color="#874E3B"
-                    />
-                    {currentActiveNav === 'account' && <ThemedView style={styles.activeIndicator} />}
-                </TouchableOpacity>
+
+                {/* Account Circle with Dropdown Menu */}
+                <View style={styles.accountContainer}>
+                    <TouchableOpacity
+                        style={[
+                            styles.accountCircle,
+                            showAccountMenu && styles.accountCircleActive
+                        ]}
+                        onPress={handleAccountPress}
+                    >
+                        <Feather
+                            name="user"
+                            size={20}
+                            color="#874E3B"
+                        />
+                        {currentActiveNav === 'account' && <ThemedView style={styles.activeIndicator} />}
+                    </TouchableOpacity>
+
+                    {/* Account Dropdown Menu using Modal for proper overlay */}
+                    <Modal
+                        visible={showAccountMenu}
+                        transparent={true}
+                        animationType="fade"
+                        onRequestClose={handleCloseMenu}
+                    >
+                        <TouchableWithoutFeedback onPress={handleCloseMenu}>
+                            <View style={styles.modalOverlay}>
+                                <TouchableWithoutFeedback>
+                                    <ThemedView style={styles.accountMenu}>
+                                        {/* User Info Section */}
+                                        <ThemedView style={styles.userInfoSection}>
+                                            <ThemedView style={styles.userAvatar}>
+                                                <Feather name="user" size={24} color="#874E3B" />
+                                            </ThemedView>
+                                            <ThemedView style={styles.userDetails}>
+                                                <ThemedText style={styles.userName}>
+                                                    {currentUser?.name || 'User'}
+                                                </ThemedText>
+                                                <ThemedText style={styles.userRole}>
+                                                    {currentUser?.role ? `${currentUser.role.charAt(0).toUpperCase() + currentUser.role.slice(1)}` : 'Role'}
+                                                </ThemedText>
+                                                <ThemedText style={styles.userUsername}>
+                                                    @{currentUser?.username || 'username'}
+                                                </ThemedText>
+                                            </ThemedView>
+                                        </ThemedView>
+
+                                        <ThemedView style={styles.menuSeparator} />
+
+                                        {/* Menu Options */}
+
+
+                                        <TouchableOpacity
+                                            style={styles.menuItem}
+                                            onPress={handleChangePassword}
+                                        >
+                                            <Feather name="lock" size={16} color="#874E3B" />
+                                            <ThemedText style={styles.menuItemText}>Change Password</ThemedText>
+                                        </TouchableOpacity>
+
+
+
+                                        <ThemedView style={styles.menuSeparator} />
+
+                                        {/* Logout Option */}
+                                        <TouchableOpacity
+                                            style={[styles.menuItem, styles.logoutMenuItem]}
+                                            onPress={handleLogout}
+                                        >
+                                            <Feather name="log-out" size={16} color="#DC2626" />
+                                            <ThemedText style={[styles.menuItemText, styles.logoutText]}>Logout</ThemedText>
+                                        </TouchableOpacity>
+                                    </ThemedView>
+                                </TouchableWithoutFeedback>
+                            </View>
+                        </TouchableWithoutFeedback>
+                    </Modal>
+                </View>
             </View>
+
+            {/* Change Password Modal */}
+            <Modal
+                visible={showChangePassword}
+                transparent={true}
+                animationType="slide"
+                onRequestClose={handleClosePasswordModal}
+            >
+                <TouchableWithoutFeedback onPress={handleClosePasswordModal}>
+                    <View style={styles.modalOverlay}>
+                        <TouchableWithoutFeedback>
+                            <ThemedView style={styles.changePasswordModal}>
+                                <ThemedText style={styles.changePasswordTitle}>Change Password</ThemedText>
+
+                                <ThemedView style={styles.passwordForm}>
+                                    <ThemedView style={styles.inputContainer}>
+                                        <ThemedText style={styles.inputLabel}>Current Password</ThemedText>
+                                        <TextInput
+                                            style={styles.textInput}
+                                            secureTextEntry
+                                            placeholder="Enter current password"
+                                            placeholderTextColor="#999"
+                                            value={currentPassword}
+                                            onChangeText={setCurrentPassword}
+                                        />
+                                    </ThemedView>
+
+                                    <ThemedView style={styles.inputContainer}>
+                                        <ThemedText style={styles.inputLabel}>New Password</ThemedText>
+                                        <TextInput
+                                            style={styles.textInput}
+                                            secureTextEntry
+                                            placeholder="Enter new password"
+                                            placeholderTextColor="#999"
+                                            value={newPassword}
+                                            onChangeText={setNewPassword}
+                                        />
+                                    </ThemedView>
+
+                                    <ThemedView style={styles.inputContainer}>
+                                        <ThemedText style={styles.inputLabel}>Confirm New Password</ThemedText>
+                                        <TextInput
+                                            style={styles.textInput}
+                                            secureTextEntry
+                                            placeholder="Confirm new password"
+                                            placeholderTextColor="#999"
+                                            value={confirmPassword}
+                                            onChangeText={setConfirmPassword}
+                                        />
+                                    </ThemedView>
+                                </ThemedView>
+
+                                <ThemedView style={styles.passwordButtons}>
+                                    <TouchableOpacity
+                                        style={[styles.passwordButton, styles.cancelButton]}
+                                        onPress={handleClosePasswordModal}
+                                    >
+                                        <ThemedText style={styles.cancelButtonText}>Cancel</ThemedText>
+                                    </TouchableOpacity>
+
+                                    <TouchableOpacity
+                                        style={[styles.passwordButton, styles.saveButton]}
+                                        onPress={handleSavePassword}
+                                    >
+                                        <ThemedText style={styles.saveButtonText}>Save Changes</ThemedText>
+                                    </TouchableOpacity>
+                                </ThemedView>
+                            </ThemedView>
+                        </TouchableWithoutFeedback>
+                    </View>
+                </TouchableWithoutFeedback>
+            </Modal>
         </ThemedView>
     );
 }
@@ -251,6 +554,7 @@ const styles = StyleSheet.create({
         marginLeft: 5,
         marginRight: 5,
         alignItems: 'center',
+        zIndex: 1000,
     },
     navbarTitle: {
         fontSize: 30,
@@ -304,6 +608,10 @@ const styles = StyleSheet.create({
         borderTopLeftRadius: 2,
         borderTopRightRadius: 2,
     },
+    accountContainer: {
+        position: 'relative',
+        marginLeft: 10,
+    },
     accountCircle: {
         width: 40,
         height: 40,
@@ -311,8 +619,103 @@ const styles = StyleSheet.create({
         backgroundColor: '#FFFEEA',
         justifyContent: 'center',
         alignItems: 'center',
-        marginLeft: 10,
         position: 'relative',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 3,
+        elevation: 3,
+    },
+    accountCircleActive: {
+        backgroundColor: '#F5E6D3',
+        shadowColor: '#874E3B',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.3,
+        shadowRadius: 5,
+        elevation: 5,
+    },
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        justifyContent: 'flex-start',
+        alignItems: 'flex-end',
+        paddingTop: 100,
+        paddingRight: 20,
+    },
+    accountMenu: {
+        width: 280,
+        backgroundColor: '#FFFEEA',
+        borderRadius: 12,
+        borderWidth: 2,
+        borderColor: '#D4A574',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.2,
+        shadowRadius: 8,
+        elevation: 8,
+        zIndex: 1001,
+        padding: 16,
+    },
+    userInfoSection: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 12,
+    },
+    userAvatar: {
+        width: 48,
+        height: 48,
+        borderRadius: 24,
+        backgroundColor: '#F5E6D3',
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginRight: 12,
+        borderWidth: 2,
+        borderColor: '#D4A574',
+    },
+    userDetails: {
+        flex: 1,
+    },
+    userName: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#874E3B',
+        marginBottom: 2,
+    },
+    userRole: {
+        fontSize: 12,
+        color: '#16A34A',
+        fontWeight: '600',
+        marginBottom: 2,
+    },
+    userUsername: {
+        fontSize: 12,
+        color: '#5A3921',
+        opacity: 0.8,
+    },
+    menuSeparator: {
+        height: 1,
+        backgroundColor: '#E8D8C8',
+        marginVertical: 8,
+    },
+    menuItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 10,
+        paddingHorizontal: 8,
+        borderRadius: 6,
+    },
+    menuItemText: {
+        fontSize: 14,
+        color: '#5A3921',
+        marginLeft: 12,
+        fontWeight: '500',
+    },
+    logoutMenuItem: {
+        marginTop: 4,
+    },
+    logoutText: {
+        color: '#DC2626',
+        fontWeight: '600',
     },
     sectionTitle1: {
         fontSize: 35,
@@ -355,5 +758,75 @@ const styles = StyleSheet.create({
         color: '#FFFEEA',
         fontSize: 8,
         fontWeight: 'bold',
+    },
+    // Change Password Modal Styles
+    changePasswordModal: {
+        width: 340,
+        backgroundColor: '#FFFEEA',
+        borderRadius: 16,
+        borderWidth: 2,
+        borderColor: '#D4A574',
+        padding: 24,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.2,
+        shadowRadius: 8,
+        elevation: 8,
+    },
+    changePasswordTitle: {
+        fontSize: 20,
+        fontWeight: 'bold',
+        color: '#874E3B',
+        textAlign: 'center',
+        marginBottom: 20,
+        fontFamily: 'LobsterTwoRegular',
+    },
+    passwordForm: {
+        marginBottom: 24,
+    },
+    inputContainer: {
+        marginBottom: 16,
+    },
+    inputLabel: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#5A3921',
+        marginBottom: 8,
+    },
+    textInput: {
+        backgroundColor: '#F5E6D3',
+        borderWidth: 1,
+        borderColor: '#D4A574',
+        borderRadius: 8,
+        padding: 12,
+        fontSize: 16,
+        color: '#5A3921',
+    },
+    passwordButtons: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        gap: 12,
+    },
+    passwordButton: {
+        flex: 1,
+        paddingVertical: 12,
+        borderRadius: 8,
+        alignItems: 'center',
+    },
+    cancelButton: {
+        backgroundColor: '#E8D8C8',
+        borderWidth: 1,
+        borderColor: '#D4A574',
+    },
+    saveButton: {
+        backgroundColor: '#874E3B',
+    },
+    cancelButtonText: {
+        color: '#5A3921',
+        fontWeight: '600',
+    },
+    saveButtonText: {
+        color: '#FFFEEA',
+        fontWeight: '600',
     },
 });

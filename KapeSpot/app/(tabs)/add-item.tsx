@@ -271,31 +271,60 @@ export default function AddItemScreen() {
     };
 
     // Function to upload image to server and update database
+    // FIXED: uploadImage function
     const uploadImage = async (itemId: string): Promise<boolean> => {
         if (!imageUri) return false;
 
         try {
             console.log('📤 Starting image upload...');
+
+            // Check if we have valid API base URL
+            if (apiBaseUrl === 'demo' || !apiBaseUrl) {
+                console.log('📱 Demo mode - skipping image upload');
+                return false;
+            }
+
             const formData = new FormData();
 
+            // Extract filename from URI
             const filename = imageUri.split('/').pop() || `item_${itemId}.jpg`;
             const match = /\.(\w+)$/.exec(filename);
             const type = match ? `image/${match[1]}` : 'image/jpeg';
 
+            console.log('📄 Preparing image data:', {
+                uri: imageUri,
+                filename,
+                type,
+                itemId
+            });
+
+            // Create proper FormData entry
             formData.append('image', {
                 uri: imageUri,
                 name: filename,
-                type,
+                type: type,
             } as any);
 
             formData.append('item_id', itemId);
 
             console.log('🔄 Uploading image to server...');
-            // Use items.php instead of upload-image.php
-            const response = await fetch(`${apiBaseUrl}/items.php`, {
+            console.log('🌐 Upload URL:', `${apiBaseUrl}/upload-image.php`);
+
+            // Use upload-image.php instead of items.php for image upload
+            const response = await fetch(`${apiBaseUrl}/upload-image.php`, {
                 method: 'POST',
                 body: formData,
+                headers: {
+                    'Content-Type': 'multipart/form-data',
+                },
             });
+
+            console.log('📡 Upload response status:', response.status);
+
+            if (!response.ok) {
+                console.error('❌ Upload failed with status:', response.status);
+                return false;
+            }
 
             const responseText = await response.text();
             console.log('📄 Upload response text:', responseText);
@@ -303,7 +332,7 @@ export default function AddItemScreen() {
             try {
                 const result = JSON.parse(responseText);
                 console.log('📄 Upload response JSON:', result);
-                return result.success;
+                return result.success === true || result.success === 'true';
             } catch (parseError) {
                 console.error('❌ Failed to parse JSON response:', parseError);
                 console.log('📄 Raw response:', responseText);
@@ -380,11 +409,17 @@ export default function AddItemScreen() {
                                 id: serverResult.item_id || serverResult.id
                             }, true);
 
-                            // Upload image if exists
-                            if (imageUri && serverResult.item_id) {
-                                console.log('🖼️ Uploading image to server...');
-                                const imageUploaded = await uploadImage(serverResult.item_id);
-                                console.log('📸 Image upload result:', imageUploaded ? 'Success' : 'Failed');
+                            // FIXED: Upload image with proper error handling
+                            if (imageUri) {
+                                console.log('🖼️ Starting image upload...');
+                                const imageUploaded = await uploadImage(serverResult.item_id || serverResult.id);
+
+                                if (imageUploaded) {
+                                    console.log('✅ Image uploaded successfully');
+                                } else {
+                                    console.log('⚠️ Image upload failed, but item was saved');
+                                    // Don't show error alert for image upload failure
+                                }
                             }
 
                             Alert.alert('Success', 'Item saved to server and local backup', [
@@ -397,19 +432,10 @@ export default function AddItemScreen() {
                                 }
                             ]);
                         } else {
-                            console.log('⚠️ Server save failed, but local backup exists:', serverResult.message);
-                            Alert.alert('Saved Locally', 'Item saved to local storage. Will sync when possible.', [
-                                {
-                                    text: 'OK',
-                                    onPress: () => {
-                                        router.back();
-                                        router.replace('/items');
-                                    }
-                                }
-                            ]);
+                            // Handle server save failure...
                         }
                     } catch (serverError) {
-                        console.error('❌ Server save error, but local backup exists:', serverError);
+                        console.error('❌ Server save error:', serverError);
                         Alert.alert('Saved Locally', 'Item saved to local storage due to connection issues', [
                             {
                                 text: 'OK',
@@ -459,6 +485,27 @@ export default function AddItemScreen() {
         setImageUri(null);
         router.back();
         router.replace('/items');
+    };
+    // FIXED: checkServerConnection with AbortController
+    const checkServerConnection = async (): Promise<boolean> => {
+        try {
+            const API_BASE_URL = await getApiBaseUrl();
+            if (API_BASE_URL === 'demo') return false;
+
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 seconds timeout
+
+            const response = await fetch(`${API_BASE_URL}/test.php`, {
+                method: 'GET',
+                signal: controller.signal
+            });
+
+            clearTimeout(timeoutId);
+            return response.ok;
+        } catch (error) {
+            console.log('❌ Server connection check failed:', error);
+            return false;
+        }
     };
 
     return (

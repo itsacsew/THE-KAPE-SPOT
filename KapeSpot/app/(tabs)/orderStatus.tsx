@@ -18,6 +18,17 @@ import { NetworkScanner } from '@/lib/network-scanner';
 import { useFocusEffect } from '@react-navigation/native';
 import React from 'react';
 import { OfflineSyncService } from '@/lib/offline-sync';
+import {
+    getFirestore,
+    collection,
+    getDocs,
+    updateDoc,
+    doc,
+    query,
+    where,
+    orderBy
+} from 'firebase/firestore';
+import { app } from '@/lib/firebase-config';
 
 interface OrderData {
     orderId: string;
@@ -27,6 +38,7 @@ interface OrderData {
     total: number;
     timestamp: string;
     status: 'unpaid' | 'paid' | 'cancelled';
+    firebaseId?: string;
 }
 
 const { width } = Dimensions.get('window');
@@ -40,19 +52,19 @@ export default function OrderStatusScreen() {
     const [selectedOrder, setSelectedOrder] = useState<OrderData | null>(null);
     const [showActionModal, setShowActionModal] = useState(false);
 
-    const getApiBaseUrl = async (): Promise<string> => {
+    // Initialize Firebase
+    const db = getFirestore(app);
+
+    const getConnectionMode = async (): Promise<'online' | 'offline'> => {
         try {
-            const serverIP = await NetworkScanner.findServerIP();
-            if (serverIP === 'demo' || serverIP === 'local') {
-                setIsOnlineMode(false);
-                return 'local';
-            }
-            const baseUrl = `http://${serverIP}/backend/api`;
-            setIsOnlineMode(true);
-            return baseUrl;
+            const mode = await NetworkScanner.getApiBaseUrl();
+            const isOnline = mode === 'online';
+            setIsOnlineMode(isOnline);
+            return mode;
         } catch (error) {
+            console.log('❌ Error checking connection mode:', error);
             setIsOnlineMode(false);
-            return 'local';
+            return 'offline';
         }
     };
 
@@ -60,11 +72,11 @@ export default function OrderStatusScreen() {
         setLoading(true);
         try {
             const syncService = OfflineSyncService.getInstance();
-            const API_BASE_URL = await getApiBaseUrl();
+            const connectionMode = await getConnectionMode();
 
             let allOrders: OrderData[] = [];
 
-            if (API_BASE_URL === 'local') {
+            if (connectionMode === 'offline') {
                 // Load from local storage only - FILTER OUT PAID AND CANCELLED ORDERS
                 console.log('📱 Loading orders from local storage...');
                 const localOrders = await syncService.getPendingReceipts();
@@ -72,33 +84,41 @@ export default function OrderStatusScreen() {
                 allOrders = localOrders.filter(order => order.status === 'unpaid');
                 console.log('📱 Local orders loaded:', allOrders.length);
             } else {
-                // Load from server
+                // Load from Firebase Firestore
                 try {
-                    console.log('🌐 Loading orders from server...');
-                    const response = await fetch(`${API_BASE_URL}/orders.php`);
+                    console.log('🔥 Loading orders from Firebase...');
 
-                    if (response.ok) {
-                        const serverOrders = await response.json();
-                        console.log('🌐 Server orders response:', serverOrders);
+                    // Query orders collection where status is 'unpaid'
+                    const ordersCollection = collection(db, 'orders');
+                    const ordersQuery = query(
+                        ordersCollection,
+                        where('status', '==', 'unpaid'),
+                        orderBy('timestamp', 'desc')
+                    );
 
-                        allOrders = serverOrders
-                            .map((order: any) => ({
-                                orderId: order.order_id || order.orderId,
-                                customerName: order.customer_name || order.customerName,
-                                items: order.items || [],
-                                subtotal: parseFloat(order.subtotal) || 0,
-                                total: parseFloat(order.total) || 0,
-                                timestamp: order.created_at || order.timestamp,
-                                status: order.status || 'unpaid'
-                            }))
-                            .filter((order: OrderData) => order.status === 'unpaid'); // Only show unpaid orders
+                    const ordersSnapshot = await getDocs(ordersQuery);
 
-                        console.log('🌐 Server orders loaded:', allOrders.length);
-                    } else {
-                        throw new Error('Server response not OK');
-                    }
-                } catch (serverError) {
-                    console.log('⚠️ Failed to load from server, falling back to local storage:', serverError);
+                    const firebaseOrders: OrderData[] = ordersSnapshot.docs.map(doc => {
+                        const data = doc.data();
+                        return {
+                            orderId: data.orderId || doc.id,
+                            customerName: data.customerName || 'Unknown Customer',
+                            items: data.items || [],
+                            subtotal: Number(data.subtotal) || 0,
+                            total: Number(data.total) || 0,
+                            timestamp: data.timestamp || data.created_at || new Date().toISOString(),
+                            status: data.status || 'unpaid',
+                            firebaseId: doc.id
+                        };
+                    });
+
+                    allOrders = firebaseOrders;
+                    console.log('🔥 Firebase orders loaded:', allOrders.length, 'unpaid orders');
+
+                } catch (firebaseError) {
+
+                    console.log('⚠️ Failed to load from Firebase, falling back to local storage');
+
                     // Fallback to local storage - FILTER OUT PAID AND CANCELLED ORDERS
                     const localOrders = await syncService.getPendingReceipts();
                     allOrders = localOrders.filter(order => order.status === 'unpaid');
@@ -131,43 +151,44 @@ export default function OrderStatusScreen() {
     const updateOrderStatus = async (orderId: string, newStatus: 'paid' | 'cancelled') => {
         try {
             const syncService = OfflineSyncService.getInstance();
-            const API_BASE_URL = await getApiBaseUrl();
+            const connectionMode = await getConnectionMode();
 
-            if (API_BASE_URL === 'local') {
-                // Update local storage
-                console.log('📱 Updating order status in local storage:', orderId, newStatus);
-                const pendingReceipts = await syncService.getItem('pendingReceipts');
-                const orders: OrderData[] = pendingReceipts ? JSON.parse(pendingReceipts) : [];
-                const updatedOrders = orders.map(order =>
-                    order.orderId === orderId ? { ...order, status: newStatus } : order
-                );
-                await syncService.setItem('pendingReceipts', JSON.stringify(updatedOrders));
-                console.log('✅ Local order status updated');
-            } else {
-                // Update server
-                console.log('🌐 Updating order status on server:', orderId, newStatus);
-                const response = await fetch(`${API_BASE_URL}/orders.php`, {
-                    method: 'PUT',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        orderId: orderId,
-                        status: newStatus
-                    }),
-                });
+            // UPDATE BOTH FIREBASE AND LOCAL STORAGE REGARDLESS OF MODE
+            console.log('🔄 Updating order status:', orderId, newStatus);
 
-                if (!response.ok) {
-                    throw new Error(`Server responded with status: ${response.status}`);
+            // 1. Always update local storage
+            console.log('📱 Updating local storage...');
+            const pendingReceipts = await syncService.getItem('pendingReceipts');
+            const localOrders: OrderData[] = pendingReceipts ? JSON.parse(pendingReceipts) : [];
+            const updatedLocalOrders = localOrders.map(order =>
+                order.orderId === orderId ? { ...order, status: newStatus } : order
+            );
+            await syncService.setItem('pendingReceipts', JSON.stringify(updatedLocalOrders));
+            console.log('✅ Local storage updated');
+
+            // 2. Update Firebase if online
+            if (connectionMode === 'online') {
+                console.log('🔥 Updating Firebase...');
+
+                // Find the order to get its Firebase ID
+                const orderToUpdate = orders.find(order => order.orderId === orderId);
+
+                if (orderToUpdate && orderToUpdate.firebaseId) {
+                    const orderDoc = doc(db, 'orders', orderToUpdate.firebaseId);
+
+                    await updateDoc(orderDoc, {
+                        status: newStatus,
+                        updated_at: new Date().toISOString()
+                    });
+
+                    console.log('✅ Firebase updated');
+                } else {
+                    console.log('⚠️ Order not found in Firebase, local storage updated only');
                 }
-
-                console.log('✅ Server order status updated');
             }
 
-            // Remove the order from local state if marked as paid OR cancelled
-            if (newStatus === 'paid' || newStatus === 'cancelled') {
-                setOrders(prev => prev.filter(order => order.orderId !== orderId));
-            }
+            // 3. Remove the order from local state
+            setOrders(prev => prev.filter(order => order.orderId !== orderId));
 
             Alert.alert('Success', `Order marked as ${newStatus}`);
             setShowActionModal(false);
@@ -238,7 +259,7 @@ export default function OrderStatusScreen() {
                             </ThemedView>
 
                             <ThemedText style={styles.modeInfo}>
-                                {isOnlineMode ? '🌐 Connected to server - Showing online data' : '📱 Using local storage - Showing local data'}
+                                {isOnlineMode ? '🔥 Connected to Firebase - Showing online data' : '📱 Using local storage - Showing local data'}
                             </ThemedText>
                             <ThemedText style={styles.subtitle}>
                                 Showing unpaid orders only

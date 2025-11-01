@@ -17,13 +17,25 @@ import { Feather } from "@expo/vector-icons";
 import { useRouter } from 'expo-router';
 import { OfflineSyncService } from '@/lib/offline-sync';
 import React from 'react';
-import { NetworkScanner } from '@/lib/network-scanner';
+import {
+    getFirestore,
+    collection,
+    query,
+    where,
+    getDocs,
+    addDoc,
+    doc,
+    setDoc
+} from 'firebase/firestore';
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
+import { app } from '@/lib/firebase-config'; // Make sure you have firebase config
 
 interface User {
     id: string;
     username: string;
     name: string;
     role: 'admin' | 'user';
+    email?: string;
 }
 
 export default function LoginScreen() {
@@ -39,27 +51,11 @@ export default function LoginScreen() {
     const [apiBaseUrl, setApiBaseUrl] = useState<string>('');
     const router = useRouter();
 
-    // Function to get dynamic API URL
-    const getApiBaseUrl = async (): Promise<string> => {
-        try {
-            const serverIP = await NetworkScanner.findServerIP();
+    // Initialize Firebase services
+    const db = getFirestore(app);
+    const auth = getAuth(app);
 
-            if (serverIP === 'demo') {
-                console.log('🔄 Login Running in demo mode');
-                return 'demo';
-            }
-
-            const baseUrl = `http://${serverIP}/backend/api`;
-            console.log(`🌐 Login Using server: ${baseUrl}`);
-            return baseUrl;
-
-        } catch (error) {
-            console.log('❌ Login Error detecting server, using offline mode');
-            return 'demo';
-        }
-    };
-
-    // Handle login - DUAL STORAGE: Online + Local
+    // Handle login - DUAL STORAGE: Firebase + Local
     const handleLogin = async () => {
         if (!username.trim() || !password.trim()) {
             Alert.alert('Missing Information', 'Please enter both username and password');
@@ -69,57 +65,66 @@ export default function LoginScreen() {
         setLoading(true);
         try {
             const syncService = OfflineSyncService.getInstance();
-            const API_BASE_URL = await getApiBaseUrl();
-            setApiBaseUrl(API_BASE_URL);
 
-            console.log('🔄 [DUAL-LOGIN] Starting dual login process...');
+            console.log('🔄 [FIREBASE-LOGIN] Starting Firebase login process...');
 
-            // STEP 1: TRY ONLINE LOGIN FIRST
-            if (API_BASE_URL !== 'demo') {
-                console.log('🌐 [DUAL-LOGIN] Step 1: Attempting ONLINE login...');
+            // STEP 1: TRY FIREBASE LOGIN FIRST
+            console.log('🔥 [FIREBASE-LOGIN] Step 1: Attempting FIREBASE login...');
 
-                try {
-                    const response = await fetch(`${API_BASE_URL}/users.php`, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({
-                            action: 'login',
-                            username: username,
-                            password: password
-                        }),
-                    });
+            try {
+                // First, find user by username in Firestore
+                const usersRef = collection(db, 'users');
+                const q = query(usersRef, where('username', '==', username.toLowerCase()));
+                const querySnapshot = await getDocs(q);
 
-                    const result = await response.json();
-
-                    if (result.success && result.user) {
-                        console.log('✅ [DUAL-LOGIN] Step 1 COMPLETE: ONLINE login successful');
-
-                        // Save user to local storage as backup
-                        await syncService.setItem('currentUser', JSON.stringify(result.user));
-
-                        console.log('💾 [DUAL-LOGIN] User saved to local storage as backup');
-
-                        // Redirect to POS
-                        router.replace('/(tabs)/pos');
-
-                        Alert.alert(
-                            'Login Successful',
-                            `Welcome back, ${result.user.name}!`,
-                            [{ text: 'OK' }]
-                        );
-                        return;
-                    } else {
-                        throw new Error(result.message || 'Online login failed');
-                    }
-                } catch (onlineError) {
-                    console.log('⚠️ [DUAL-LOGIN] Online login failed, trying offline...', onlineError);
+                if (querySnapshot.empty) {
+                    throw new Error('User not found');
                 }
+
+                const userDoc = querySnapshot.docs[0];
+                const userData = userDoc.data();
+
+                // For Firebase Auth, we'll use email/password
+                // Since we're using username, we'll create email pattern or use separate auth
+                const userEmail = userData.email || `${username}@kapespot.com`;
+
+                // Sign in with Firebase Auth
+                const userCredential = await signInWithEmailAndPassword(auth, userEmail, password);
+                const firebaseUser = userCredential.user;
+
+                if (firebaseUser && userData) {
+                    console.log('✅ [FIREBASE-LOGIN] Step 1 COMPLETE: FIREBASE login successful');
+
+                    const user: User = {
+                        id: userDoc.id,
+                        username: userData.username,
+                        name: userData.name,
+                        role: userData.role
+                    };
+
+                    // Save user to local storage as backup
+                    await syncService.setItem('currentUser', JSON.stringify(user));
+
+                    console.log('💾 [FIREBASE-LOGIN] User saved to local storage as backup');
+
+                    // Redirect to POS
+                    router.replace('/(tabs)/pos');
+
+                    Alert.alert(
+                        'Login Successful',
+                        `Welcome back, ${user.name}!`,
+                        [{ text: 'OK' }]
+                    );
+                    return;
+                } else {
+                    throw new Error('Firebase login failed');
+                }
+            } catch (firebaseError) {
+                console.log('⚠️ [FIREBASE-LOGIN] Firebase login failed, trying offline...', firebaseError);
             }
 
             // STEP 2: OFFLINE LOGIN FALLBACK
-            console.log('📱 [DUAL-LOGIN] Step 2: Attempting OFFLINE login...');
+            console.log('📱 [FIREBASE-LOGIN] Step 2: Attempting OFFLINE login...');
 
             const offlineUsersData = await syncService.getItem('users');
             const offlineUsers = offlineUsersData ? JSON.parse(offlineUsersData) : [];
@@ -130,7 +135,7 @@ export default function LoginScreen() {
             );
 
             if (offlineUser) {
-                console.log('✅ [DUAL-LOGIN] Step 2 COMPLETE: OFFLINE login successful');
+                console.log('✅ [FIREBASE-LOGIN] Step 2 COMPLETE: OFFLINE login successful');
 
                 // Remove password before saving
                 const { password: _, ...userWithoutPassword } = offlineUser;
@@ -161,7 +166,7 @@ export default function LoginScreen() {
         }
     };
 
-    // Handle sign up - DUAL STORAGE: Online + Local
+    // Handle sign up - DUAL STORAGE: Firebase + Local
     const handleSignUp = async () => {
         if (!username.trim() || !password.trim() || !name.trim()) {
             Alert.alert('Missing Information', 'Please fill in all required fields');
@@ -181,80 +186,96 @@ export default function LoginScreen() {
         setLoading(true);
         try {
             const syncService = OfflineSyncService.getInstance();
-            const API_BASE_URL = await getApiBaseUrl();
-            setApiBaseUrl(API_BASE_URL);
 
-            console.log('🔄 [DUAL-REGISTER] Starting dual registration process...');
+            console.log('🔄 [FIREBASE-REGISTER] Starting Firebase registration process...');
 
+            const userEmail = `${username}@kapespot.com`;
             const newUser = {
-                username: username,
-                password: password,
+                username: username.toLowerCase(),
                 name: name,
-                role: selectedRole
+                role: selectedRole,
+                email: userEmail,
+                createdAt: new Date().toISOString()
             };
 
-            // STEP 1: TRY ONLINE REGISTRATION FIRST
-            if (API_BASE_URL !== 'demo') {
-                console.log('🌐 [DUAL-REGISTER] Step 1: Attempting ONLINE registration...');
+            // STEP 1: TRY FIREBASE REGISTRATION FIRST
+            console.log('🔥 [FIREBASE-REGISTER] Step 1: Attempting FIREBASE registration...');
 
-                try {
-                    const response = await fetch(`${API_BASE_URL}/users.php`, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({
-                            action: 'register',
-                            ...newUser
-                        }),
-                    });
+            try {
+                // Check if username already exists
+                const usersRef = collection(db, 'users');
+                const q = query(usersRef, where('username', '==', username.toLowerCase()));
+                const querySnapshot = await getDocs(q);
 
-                    const result = await response.json();
+                if (!querySnapshot.empty) {
+                    Alert.alert('Username Exists', 'This username is already taken');
+                    return;
+                }
 
-                    if (result.success && result.user) {
-                        console.log('✅ [DUAL-REGISTER] Step 1 COMPLETE: ONLINE registration successful');
+                // Create user in Firebase Auth
+                const userCredential = await createUserWithEmailAndPassword(auth, userEmail, password);
+                const firebaseUser = userCredential.user;
 
-                        // Save user to local storage
-                        await syncService.setItem('currentUser', JSON.stringify(result.user));
+                // Save user data to Firestore
+                const userDocRef = doc(collection(db, 'users'));
+                await setDoc(userDocRef, {
+                    ...newUser,
+                    id: userDocRef.id,
+                    firebaseUID: firebaseUser.uid
+                });
 
-                        // Also save to offline users list
-                        const existingUsers = await syncService.getItem('users');
-                        const users = existingUsers ? JSON.parse(existingUsers) : [];
-                        users.push({ ...newUser, id: Date.now().toString() });
-                        await syncService.setItem('users', JSON.stringify(users));
+                console.log('✅ [FIREBASE-REGISTER] Step 1 COMPLETE: FIREBASE registration successful');
 
-                        console.log('💾 [DUAL-REGISTER] User saved to local storage');
+                const createdUser: User = {
+                    id: userDocRef.id,
+                    username: newUser.username,
+                    name: newUser.name,
+                    role: newUser.role
+                };
 
-                        // Show success message and redirect to sign in
-                        Alert.alert(
-                            'Registration Successful!',
-                            `Account created successfully for ${result.user.name} (${result.user.role}). Please sign in with your credentials.`,
-                            [
-                                {
-                                    text: 'OK',
-                                    onPress: () => {
-                                        // Clear form and go back to sign in
-                                        setUsername('');
-                                        setPassword('');
-                                        setConfirmPassword('');
-                                        setName('');
-                                        setSelectedRole('user');
-                                        setIsSignUp(false);
-                                    }
-                                }
-                            ]
-                        );
-                        return;
-                    } else {
-                        throw new Error(result.message || 'Online registration failed');
-                    }
-                } catch (onlineError) {
-                    console.log('⚠️ [DUAL-REGISTER] Online registration failed, saving offline...', onlineError);
+                // Save user to local storage
+                await syncService.setItem('currentUser', JSON.stringify(createdUser));
+
+                // Also save to offline users list
+                const existingUsers = await syncService.getItem('users');
+                const users = existingUsers ? JSON.parse(existingUsers) : [];
+                users.push({ ...newUser, id: userDocRef.id, password: password });
+                await syncService.setItem('users', JSON.stringify(users));
+
+                console.log('💾 [FIREBASE-REGISTER] User saved to local storage');
+
+                // Show success message and redirect to sign in
+                Alert.alert(
+                    'Registration Successful!',
+                    `Account created successfully for ${createdUser.name} (${createdUser.role}). Please sign in with your credentials.`,
+                    [
+                        {
+                            text: 'OK',
+                            onPress: () => {
+                                // Clear form and go back to sign in
+                                setUsername('');
+                                setPassword('');
+                                setConfirmPassword('');
+                                setName('');
+                                setSelectedRole('user');
+                                setIsSignUp(false);
+                            }
+                        }
+                    ]
+                );
+                return;
+
+            } catch (firebaseError: any) {
+                console.log('⚠️ [FIREBASE-REGISTER] Firebase registration failed, saving offline...', firebaseError);
+
+                if (firebaseError.code === 'auth/email-already-in-use') {
+                    Alert.alert('Username Exists', 'This username is already taken');
+                    return;
                 }
             }
 
             // STEP 2: OFFLINE REGISTRATION FALLBACK
-            console.log('📱 [DUAL-REGISTER] Step 2: Saving OFFLINE registration...');
+            console.log('📱 [FIREBASE-REGISTER] Step 2: Saving OFFLINE registration...');
 
             const existingUsers = await syncService.getItem('users');
             const users = existingUsers ? JSON.parse(existingUsers) : [];
@@ -267,7 +288,8 @@ export default function LoginScreen() {
 
             const offlineUser = {
                 ...newUser,
-                id: Date.now().toString()
+                id: Date.now().toString(),
+                password: password
             };
 
             users.push(offlineUser);
@@ -277,7 +299,7 @@ export default function LoginScreen() {
             const { password: _, ...userWithoutPassword } = offlineUser;
             await syncService.setItem('currentUser', JSON.stringify(userWithoutPassword));
 
-            console.log('✅ [DUAL-REGISTER] Step 2 COMPLETE: OFFLINE registration successful');
+            console.log('✅ [FIREBASE-REGISTER] Step 2 COMPLETE: OFFLINE registration successful');
 
             // Show success message and redirect to sign in
             Alert.alert(
@@ -538,6 +560,7 @@ export default function LoginScreen() {
     );
 }
 
+// ... keep the same styles ...
 const styles = StyleSheet.create({
     container: {
         flex: 1,

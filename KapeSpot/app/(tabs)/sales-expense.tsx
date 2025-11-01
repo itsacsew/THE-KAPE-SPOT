@@ -17,6 +17,15 @@ import { useFocusEffect } from '@react-navigation/native';
 import React from 'react';
 import { OfflineSyncService } from '@/lib/offline-sync';
 import { Svg, Line, Rect, Text as SvgText, G } from 'react-native-svg';
+import {
+    getFirestore,
+    collection,
+    getDocs,
+    query,
+    where,
+    orderBy
+} from 'firebase/firestore';
+import { app } from '@/lib/firebase-config';
 
 interface OrderData {
     orderId: string;
@@ -26,6 +35,7 @@ interface OrderData {
     total: number;
     timestamp: string;
     status: 'unpaid' | 'paid' | 'cancelled';
+    firebaseId?: string;
 }
 
 interface SalesData {
@@ -154,19 +164,19 @@ export default function SalesExpenseScreen() {
     const [timeFilter, setTimeFilter] = useState<'day' | 'week' | 'month' | 'year'>('week');
     const [salesData, setSalesData] = useState<SalesData[]>([]);
 
-    const getApiBaseUrl = async (): Promise<string> => {
+    // Initialize Firebase
+    const db = getFirestore(app);
+
+    const getConnectionMode = async (): Promise<'online' | 'offline'> => {
         try {
-            const serverIP = await NetworkScanner.findServerIP();
-            if (serverIP === 'demo' || serverIP === 'local') {
-                setIsOnlineMode(false);
-                return 'local';
-            }
-            const baseUrl = `http://${serverIP}/backend/api`;
-            setIsOnlineMode(true);
-            return baseUrl;
+            const mode = await NetworkScanner.getApiBaseUrl();
+            const isOnline = mode === 'online';
+            setIsOnlineMode(isOnline);
+            return mode;
         } catch (error) {
+            console.log('❌ Error checking connection mode:', error);
             setIsOnlineMode(false);
-            return 'local';
+            return 'offline';
         }
     };
 
@@ -174,42 +184,52 @@ export default function SalesExpenseScreen() {
         setLoading(true);
         try {
             const syncService = OfflineSyncService.getInstance();
-            const API_BASE_URL = await getApiBaseUrl();
+            const connectionMode = await getConnectionMode();
 
             let allOrders: OrderData[] = [];
 
-            if (API_BASE_URL === 'local') {
+            if (connectionMode === 'offline') {
+                // Load from local storage only - ONLY PAID ORDERS
                 console.log('📱 Loading sales data from local storage...');
                 const localOrders = await syncService.getPendingReceipts();
                 allOrders = localOrders.filter(order => order.status === 'paid');
                 console.log('📱 Local sales data loaded:', allOrders.length);
             } else {
+                // Load from Firebase Firestore - ONLY PAID ORDERS
                 try {
-                    console.log('🌐 Loading sales data from server...');
-                    const response = await fetch(`${API_BASE_URL}/orders.php`);
+                    console.log('🔥 Loading sales data from Firebase...');
 
-                    if (response.ok) {
-                        const serverOrders = await response.json();
-                        console.log('🌐 Server sales data response:', serverOrders);
+                    // Query orders collection where status is 'paid'
+                    const ordersCollection = collection(db, 'orders');
+                    const ordersQuery = query(
+                        ordersCollection,
+                        where('status', '==', 'paid'),
+                        orderBy('timestamp', 'desc')
+                    );
 
-                        allOrders = serverOrders
-                            .map((order: any) => ({
-                                orderId: order.order_id || order.orderId,
-                                customerName: order.customer_name || order.customerName,
-                                items: order.items || [],
-                                subtotal: parseFloat(order.subtotal) || 0,
-                                total: parseFloat(order.total) || 0,
-                                timestamp: order.created_at || order.timestamp,
-                                status: order.status || 'unpaid'
-                            }))
-                            .filter((order: OrderData) => order.status === 'paid');
+                    const ordersSnapshot = await getDocs(ordersQuery);
 
-                        console.log('🌐 Server sales data loaded:', allOrders.length);
-                    } else {
-                        throw new Error('Server response not OK');
-                    }
-                } catch (serverError) {
-                    console.log('⚠️ Failed to load from server, falling back to local storage:', serverError);
+                    const firebaseOrders: OrderData[] = ordersSnapshot.docs.map(doc => {
+                        const data = doc.data();
+                        return {
+                            orderId: data.orderId || doc.id,
+                            customerName: data.customerName || 'Unknown Customer',
+                            items: data.items || [],
+                            subtotal: Number(data.subtotal) || 0,
+                            total: Number(data.total) || 0,
+                            timestamp: data.timestamp || data.created_at || new Date().toISOString(),
+                            status: data.status || 'paid',
+                            firebaseId: doc.id
+                        };
+                    });
+
+                    allOrders = firebaseOrders;
+                    console.log('🔥 Firebase sales data loaded:', allOrders.length, 'paid orders');
+
+                } catch (firebaseError) {
+                    console.log('⚠️ Failed to load from Firebase, falling back to local storage:', firebaseError);
+
+                    // Fallback to local storage - ONLY PAID ORDERS
                     const localOrders = await syncService.getPendingReceipts();
                     allOrders = localOrders.filter(order => order.status === 'paid');
                     console.log('📱 Fallback to local sales data:', allOrders.length);
@@ -223,6 +243,7 @@ export default function SalesExpenseScreen() {
 
         } catch (error) {
             console.error('❌ Error loading sales data:', error);
+            // Final fallback - try to get from local storage and filter only paid orders
             const syncService = OfflineSyncService.getInstance();
             const localOrders = await syncService.getPendingReceipts();
             const filteredOrders = localOrders.filter(order => order.status === 'paid');
@@ -370,7 +391,7 @@ export default function SalesExpenseScreen() {
                                 </ThemedView>
 
                                 <ThemedText style={styles.modeInfo}>
-                                    {isOnlineMode ? '🌐 Connected to server' : '📱 Using local storage'}
+                                    {isOnlineMode ? '🔥 Connected to Firebase - Showing online data' : '📱 Using local storage - Showing local data'}
                                 </ThemedText>
 
                                 {/* Time Filter Buttons */}

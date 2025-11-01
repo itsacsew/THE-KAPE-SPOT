@@ -20,22 +20,7 @@ export default function RootLayout() {
     LobsterTwoRegular: require('../assets/fonts/LobsterTwo-Regular.ttf'),
   });
 
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
-
-  useEffect(() => {
-    // Check if user is already logged in
-    const checkAuthStatus = async () => {
-      try {
-        const syncService = OfflineSyncService.getInstance();
-        const currentUser = await syncService.getItem('currentUser');
-        setIsAuthenticated(!!currentUser);
-      } catch (error) {
-        setIsAuthenticated(false);
-      }
-    };
-
-    checkAuthStatus();
-  }, []);
+  const [appIsReady, setAppIsReady] = useState(false);
 
   useEffect(() => {
     // Initialize network monitoring
@@ -58,9 +43,11 @@ export default function RootLayout() {
 
         if (loaded) {
           await SplashScreen.hideAsync();
+          setAppIsReady(true);
         }
       } catch (error) {
         console.error('Initialization error:', error);
+        setAppIsReady(true);
       }
     }
 
@@ -73,30 +60,17 @@ export default function RootLayout() {
     };
   }, [loaded]);
 
-  if (!loaded || isAuthenticated === null) {
+  if (!loaded || !appIsReady) {
     return null;
   }
 
-  // Redirect to login if not authenticated, otherwise show tabs
-  if (!isAuthenticated) {
-    return (
-      <>
-        <StatusBar hidden={true} />
-        <Stack>
-          <Stack.Screen name="login" options={{ headerShown: false }} />
-          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-          <Stack.Screen name="+not-found" />
-        </Stack>
-      </>
-    );
-  }
-
+  // ALWAYS show login screen first
   return (
     <>
       <StatusBar hidden={true} />
       <Stack>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="login" options={{ headerShown: false }} />
+        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="+not-found" />
       </Stack>
     </>

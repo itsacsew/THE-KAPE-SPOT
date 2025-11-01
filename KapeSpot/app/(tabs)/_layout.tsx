@@ -3,7 +3,6 @@ import { Tabs, Redirect } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 
 import { HapticTab } from '@/components/haptic-tab';
-import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { OfflineSyncService } from '@/lib/offline-sync';
@@ -47,15 +46,11 @@ export default function TabLayout() {
       }}
       initialRouteName="pos"
     >
+      {/* REMOVE INVALID TABS - Only keep existing ones */}
       <Tabs.Screen
-        name="login"
+        name="index" // This is your new index.tsx
         options={{
           title: 'Home',
-        }}
-        listeners={{
-          tabPress: (e) => {
-            e.preventDefault();
-          },
         }}
       />
       <Tabs.Screen
@@ -65,9 +60,9 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="items"
+        name="orderStatus"
         options={{
-          title: 'Items',
+          title: 'Order Status',
         }}
       />
       <Tabs.Screen
@@ -76,6 +71,19 @@ export default function TabLayout() {
           title: 'Sales & Expense',
         }}
       />
+      <Tabs.Screen
+        name="settings"
+        options={{
+          title: 'Settings',
+        }}
+      />
+
+      {/* REMOVE THESE - They don't exist as files */}
+      {/* 
+      <Tabs.Screen name="items" />
+      <Tabs.Screen name="log" />
+      <Tabs.Screen name="login" /> 
+      */}
     </Tabs>
   );
 }

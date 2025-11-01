@@ -17,6 +17,17 @@ import { NetworkScanner } from '@/lib/network-scanner';
 import { useFocusEffect } from '@react-navigation/native';
 import React from 'react';
 import { OfflineSyncService } from '@/lib/offline-sync';
+import {
+    getFirestore,
+    collection,
+    getDocs,
+    addDoc,
+    updateDoc,
+    doc,
+    query,
+    where
+} from 'firebase/firestore';
+import { app } from '@/lib/firebase-config';
 
 interface MenuItem {
     id: string;
@@ -29,6 +40,9 @@ interface MenuItem {
     status: boolean;
     image?: string | any;
     isOffline?: boolean;
+    firebaseId?: string;
+    image_base64?: string;
+    sales?: number;
 }
 
 interface Category {
@@ -37,21 +51,7 @@ interface Category {
     icon?: string;
     items_count?: number;
     isOffline?: boolean;
-}
-
-interface ApiMenuItem {
-    id: number | string;
-    code: string;
-    name: string;
-    price: string | number;
-    category: string;
-    stocks: string | number;
-    sales: string | number;
-    status: string | number | boolean;
-    description?: string;
-    image?: string | null;
-    created_at?: string;
-    updated_at?: string;
+    firebaseId?: string;
 }
 
 interface ReceiptData {
@@ -62,6 +62,7 @@ interface ReceiptData {
     total: number;
     timestamp: string;
     status: 'unpaid' | 'paid' | 'cancelled';
+    firebaseId?: string;
 }
 
 export default function PosScreen() {
@@ -71,31 +72,25 @@ export default function PosScreen() {
     const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
     const [categories, setCategories] = useState<Category[]>([]);
     const [loading, setLoading] = useState(false);
-    const [apiBaseUrl, setApiBaseUrl] = useState<string>('');
     const [isOnlineMode, setIsOnlineMode] = useState<boolean>(false);
     const [customerName, setCustomerName] = useState('');
     const [showReceiptModal, setShowReceiptModal] = useState(false);
     const [currentReceipt, setCurrentReceipt] = useState<ReceiptData | null>(null);
 
-    const getApiBaseUrl = async (): Promise<string> => {
+    // Initialize Firebase
+    const db = getFirestore(app);
+
+    // Function to get connection mode
+    const getConnectionMode = async (): Promise<'online' | 'offline'> => {
         try {
-            const serverIP = await NetworkScanner.findServerIP();
-
-            if (serverIP === 'demo') {
-                console.log('🔄 POS Running in demo mode');
-                setIsOnlineMode(false);
-                return 'demo';
-            }
-
-            const baseUrl = `http://${serverIP}/backend/api`;
-            console.log(`🌐 POS Using server: ${baseUrl}`);
-            setIsOnlineMode(true);
-            return baseUrl;
-
+            const mode = await NetworkScanner.getApiBaseUrl();
+            const isOnline = mode === 'online';
+            setIsOnlineMode(isOnline);
+            return mode;
         } catch (error) {
-            console.log('❌ POS Error detecting server, using offline mode');
+            console.log('❌ Error checking connection mode:', error);
             setIsOnlineMode(false);
-            return 'demo';
+            return 'offline';
         }
     };
 
@@ -103,68 +98,77 @@ export default function PosScreen() {
         setLoading(true);
         try {
             const syncService = OfflineSyncService.getInstance();
-            const API_BASE_URL = await getApiBaseUrl();
-            setApiBaseUrl(API_BASE_URL);
+            const connectionMode = await getConnectionMode();
 
-            if (API_BASE_URL === 'demo') {
-                console.log('📱 POS Loading OFFLINE data (demo + local storage)...');
+            if (connectionMode === 'offline') {
+                console.log('📱 POS Loading OFFLINE data (local storage)...');
 
                 const offlineItems = await syncService.getItems();
                 const allOfflineItems = [...offlineItems];
 
-                const posItems: MenuItem[] = allOfflineItems.map(item => ({
-                    ...item,
-                    quantity: 0,
-                    stocks: Number(item.stocks || 0),
-                    status: item.status === true || item.status === '1' || item.status === 1,
-                    isOffline: true
-                }));
+                const posItems: MenuItem[] = allOfflineItems
+                    .filter(item => item.status === true || item.status === '1' || item.status === 1)
+                    .map(item => ({
+                        ...item,
+                        quantity: 0,
+                        stocks: Number(item.stocks || 0),
+                        status: true,
+                        isOffline: true,
+                        sales: item.sales || 0
+                    }));
 
                 setMenuItems(posItems);
                 console.log('✅ POS Loaded OFFLINE items:', posItems.length, 'items');
                 return;
             }
 
-            console.log('🔗 POS Fetching from SERVER (ONLINE MODE)...');
-            const response = await fetch(`${API_BASE_URL}/items.php`);
+            console.log('🔥 POS Fetching from FIREBASE (ONLINE MODE)...');
 
-            if (!response.ok) throw new Error('HTTP error');
+            // Fetch active items from Firebase
+            const itemsCollection = collection(db, 'items');
+            const itemsQuery = query(itemsCollection, where('status', '==', true));
+            const itemsSnapshot = await getDocs(itemsQuery);
 
-            const data: ApiMenuItem[] = await response.json();
-            console.log('📦 POS Server data received:', data.length, 'items');
-
-            const serverItems: MenuItem[] = data
-                .filter((item: ApiMenuItem) =>
-                    item.status === '1' || item.status === 1 || item.status === true
-                )
-                .map((item: ApiMenuItem) => ({
-                    id: String(item.id),
-                    code: String(item.code),
-                    name: String(item.name),
-                    price: Number(item.price),
-                    category: String(item.category),
-                    stocks: Number(item.stocks || 0),
+            const firebaseItems: MenuItem[] = itemsSnapshot.docs.map(doc => {
+                const data = doc.data();
+                return {
+                    id: doc.id,
+                    code: data.code || '',
+                    name: data.name || '',
+                    price: Number(data.price || 0),
+                    category: data.category || 'Uncategorized',
+                    stocks: Number(data.stocks || 0),
                     quantity: 0,
                     status: true,
-                    image: item.image || undefined,
-                    isOffline: false
-                }));
+                    image_base64: data.image_base64 || null,
+                    has_image: data.has_image || false,
+                    isOffline: false,
+                    firebaseId: doc.id,
+                    sales: Number(data.sales || 0)
+                };
+            });
 
-            setMenuItems(serverItems);
-            console.log('✅ POS Loaded ONLINE items:', serverItems.length, 'active server items');
+            setMenuItems(firebaseItems);
+            console.log('✅ POS Loaded FIREBASE items:', firebaseItems.length, 'active items');
 
         } catch (error) {
+            console.error('❌ Error loading menu items:', error);
+
+            // Fallback to local storage
             const syncService = OfflineSyncService.getInstance();
             const offlineItems = await syncService.getItems();
-            const offlinePosItems: MenuItem[] = offlineItems.map(item => ({
-                ...item,
-                quantity: 0,
-                stocks: Number(item.stocks || 0),
-                status: item.status === true || item.status === '1' || item.status === 1,
-                isOffline: true
-            }));
+            const offlinePosItems: MenuItem[] = offlineItems
+                .filter(item => item.status === true || item.status === '1' || item.status === 1)
+                .map(item => ({
+                    ...item,
+                    quantity: 0,
+                    stocks: Number(item.stocks || 0),
+                    status: true,
+                    isOffline: true,
+                    sales: item.sales || 0
+                }));
 
-            setMenuItems([...offlinePosItems]);
+            setMenuItems(offlinePosItems);
             setIsOnlineMode(false);
         } finally {
             setLoading(false);
@@ -174,9 +178,9 @@ export default function PosScreen() {
     const loadCategories = async () => {
         try {
             const syncService = OfflineSyncService.getInstance();
-            const API_BASE_URL = await getApiBaseUrl();
+            const connectionMode = await getConnectionMode();
 
-            if (API_BASE_URL === 'demo') {
+            if (connectionMode === 'offline') {
                 console.log('📱 POS Loading OFFLINE categories (local storage)...');
 
                 const offlineCategories = await syncService.getLocalCategories();
@@ -198,24 +202,29 @@ export default function PosScreen() {
                 return;
             }
 
-            console.log('🔗 POS Fetching categories from SERVER (ONLINE MODE)...');
-            const response = await fetch(`${API_BASE_URL}/categories.php`);
+            console.log('🔥 POS Fetching categories from FIREBASE (ONLINE MODE)...');
 
-            if (!response.ok) throw new Error('HTTP error');
+            // Fetch categories from Firebase
+            const categoriesCollection = collection(db, 'categories');
+            const categoriesSnapshot = await getDocs(categoriesCollection);
 
-            const data = await response.json();
-            console.log('📦 POS Server categories received:', data.length, 'categories');
+            const firebaseCategories: Category[] = categoriesSnapshot.docs.map(doc => {
+                const data = doc.data();
+                return {
+                    id: doc.id,
+                    name: data.name || '',
+                    icon: data.icon || 'folder',
+                    items_count: data.items_count || 0,
+                    isOffline: false,
+                    firebaseId: doc.id
+                };
+            });
 
+            // Also get local categories for fallback
             const offlineCategories = await syncService.getLocalCategories();
 
             const allCategoriesRaw = [
-                ...data.map((category: any) => ({
-                    id: String(category.id),
-                    name: String(category.name),
-                    icon: category.icon || 'folder',
-                    items_count: category.items_count || 0,
-                    isOffline: false
-                })),
+                ...firebaseCategories,
                 ...offlineCategories.map(cat => ({
                     ...cat,
                     isOffline: true
@@ -235,8 +244,9 @@ export default function PosScreen() {
             console.log('✅ POS Loaded MERGED categories:', finalCategories.length, 'categories');
 
         } catch (error) {
-            console.log('❌ POS Error loading categories, falling back to OFFLINE mode');
+            console.error('❌ Error loading categories:', error);
 
+            // Fallback to local storage
             const syncService = OfflineSyncService.getInstance();
             const offlineCategories = await syncService.getLocalCategories();
 
@@ -261,9 +271,14 @@ export default function PosScreen() {
         React.useCallback(() => {
             loadMenuItems();
             loadCategories();
+
+            // Clear cart when screen loses focus
+            return () => {
+                console.log('🧹 Clearing cart due to navigation...');
+                clearCart();
+            };
         }, [])
     );
-
 
     const filteredItems = menuItems.filter(item =>
         item.name.toLowerCase().includes(searchQuery.toLowerCase()) &&
@@ -355,6 +370,35 @@ export default function PosScreen() {
         setCustomerName('');
     };
 
+    // Update item stocks and sales in Firebase
+    const updateItemStocksAndSales = async (itemId: string, newStocks: number, quantitySold: number) => {
+        try {
+            const connectionMode = await getConnectionMode();
+
+            if (connectionMode === 'online') {
+                const item = menuItems.find(item => item.id === itemId);
+
+                if (item && item.firebaseId) {
+                    const itemDoc = doc(db, 'items', item.firebaseId);
+                    const currentSales = item.sales || 0;
+
+                    await updateDoc(itemDoc, {
+                        stocks: newStocks,
+                        sales: currentSales + quantitySold,
+                        updated_at: new Date().toISOString()
+                    });
+
+                    console.log('✅ Updated Firebase item:', item.name, {
+                        newStocks: newStocks,
+                        sales: currentSales + quantitySold
+                    });
+                }
+            }
+        } catch (error) {
+            console.error('❌ Error updating Firebase item:', error);
+        }
+    };
+
     const placeOrder = async () => {
         if (cart.length === 0) {
             Alert.alert('Empty Cart', 'Please add items to cart first!');
@@ -369,7 +413,7 @@ export default function PosScreen() {
         setLoading(true);
         try {
             const syncService = OfflineSyncService.getInstance();
-            const API_BASE_URL = await getApiBaseUrl();
+            const connectionMode = await getConnectionMode();
 
             const receiptData: ReceiptData = {
                 orderId: `ORD-${Date.now()}`,
@@ -377,115 +421,101 @@ export default function PosScreen() {
                 items: [...cart],
                 subtotal: subtotal,
                 total: total,
-                timestamp: new Date().toLocaleString(),
-                status: 'unpaid'
+                timestamp: new Date().toISOString(),
+                status: 'unpaid' // UNPAID LANG GYUD TANAN
             };
 
-            console.log('🔄 [DUAL-SAVE] Starting dual-save process for order...');
+            console.log('🔄 [FIREBASE ORDER] Starting order process...');
+            console.log('🌐 Current Mode:', connectionMode === 'offline' ? 'OFFLINE' : 'ONLINE');
 
-            console.log('💾 [DUAL-SAVE] Step 1: Saving to LOCAL storage...');
+            // STEP 1: ALWAYS SAVE TO LOCAL STORAGE FIRST
+            console.log('💾 Step 1: Saving to LOCAL storage...');
             const existingReceipts = await syncService.getItem('pendingReceipts');
             const receipts = existingReceipts ? JSON.parse(existingReceipts) : [];
             receipts.push(receiptData);
             await syncService.setItem('pendingReceipts', JSON.stringify(receipts));
 
-            console.log('✅ [DUAL-SAVE] Step 1 COMPLETE: Saved to LOCAL storage');
+            console.log('✅ Step 1 COMPLETE: Saved to LOCAL storage');
 
-            if (API_BASE_URL !== 'demo' && isOnlineMode) {
-                console.log('🌐 [DUAL-SAVE] Step 2: Attempting to save to SERVER...');
+            // STEP 2: TRY TO SAVE TO FIREBASE IF ONLINE
+            if (connectionMode === 'online') {
+                console.log('🔥 Step 2: Attempting to save to FIREBASE...');
 
                 try {
-                    const response = await fetch(`${API_BASE_URL}/orders.php`, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({
-                            orderId: receiptData.orderId,
-                            customerName: receiptData.customerName,
-                            items: receiptData.items,
-                            subtotal: receiptData.subtotal,
-                            total: receiptData.total,
-                            status: receiptData.status
-                        }),
+                    // Save order to Firebase
+                    const orderData = {
+                        orderId: receiptData.orderId,
+                        customerName: receiptData.customerName,
+                        items: receiptData.items.map(item => ({
+                            id: item.id,
+                            name: item.name,
+                            price: item.price,
+                            quantity: item.quantity,
+                            total: item.price * item.quantity
+                        })),
+                        subtotal: receiptData.subtotal,
+                        total: receiptData.total,
+                        status: receiptData.status, // KINI AUTOMATICALLY MA-UNPAY NA
+                        timestamp: receiptData.timestamp,
+                        created_at: new Date().toISOString()
+                    };
+
+                    const docRef = await addDoc(collection(db, 'orders'), orderData);
+                    const firebaseId = docRef.id;
+
+                    console.log('✅ Step 2 COMPLETE: Saved to FIREBASE successfully:', {
+                        firebaseId: firebaseId,
+                        orderId: receiptData.orderId
                     });
 
-                    let result;
-                    const responseText = await response.text();
+                    // Update receipt data with Firebase ID
+                    receiptData.firebaseId = firebaseId;
 
-                    try {
-                        result = JSON.parse(responseText);
-                    } catch (parseError) {
-                        console.error('❌ [DUAL-SAVE] Failed to parse JSON response:', responseText);
-                        throw new Error('Server returned invalid JSON format');
-                    }
+                    // STEP 3: UPDATE ITEM STOCKS AND SALES IN FIREBASE
+                    console.log('📦 Step 3: Updating item stocks and sales in Firebase...');
 
-                    if (!response.ok) {
-                        throw new Error(result.message || `HTTP error! status: ${response.status}`);
-                    }
+                    for (const cartItem of cart) {
+                        const currentItem = menuItems.find(item => item.id === cartItem.id);
+                        if (currentItem) {
+                            const newStocks = currentItem.stocks;
+                            const quantitySold = cartItem.quantity;
 
-                    if (result.success) {
-                        console.log('✅ [DUAL-SAVE] Step 2 COMPLETE: Saved to SERVER successfully');
-                        console.log('📄 Server response:', result);
+                            // Update Firebase
+                            await updateItemStocksAndSales(cartItem.id, newStocks, quantitySold);
 
-                        if (result.order_id || result.id) {
-                            console.log('🔄 [DUAL-SAVE] Updating local record with server info...');
+                            console.log('✅ Updated stocks for:', cartItem.name, {
+                                newStocks: newStocks,
+                                quantitySold: quantitySold
+                            });
                         }
-
-                        console.log('🎉 [DUAL-SAVE] ORDER SAVED TO BOTH LOCAL AND SERVER!');
-
-                    } else {
-                        throw new Error(result.message || 'Server returned success: false');
                     }
 
-                } catch (serverError) {
-                    console.log('⚠️ [DUAL-SAVE] Server save failed, but local backup exists:', serverError);
-                    console.log('📱 [DUAL-SAVE] Order saved to local storage only. Server sync will be retried later.');
+                    console.log('✅ Step 3 COMPLETE: All item stocks updated in Firebase');
+
+                    // STEP 4: UPDATE LOCAL STORAGE WITH FIREBASE INFO
+                    console.log('🔄 Step 4: Updating local record with Firebase info...');
+                    const updatedReceipts = receipts.map((receipt: ReceiptData) =>
+                        receipt.orderId === receiptData.orderId
+                            ? { ...receipt, firebaseId: firebaseId }
+                            : receipt
+                    );
+                    await syncService.setItem('pendingReceipts', JSON.stringify(updatedReceipts));
+
+                    console.log('✅ Step 4 COMPLETE: Local record updated with Firebase ID');
+
+                    console.log('🎉 [FIREBASE ORDER] ORDER PROCESS COMPLETED SUCCESSFULLY!');
+
+                } catch (firebaseError) {
+                    console.error('❌ Firebase save error:', firebaseError);
+                    console.log('📱 Order saved to local storage only. Firebase sync will be retried later.');
                 }
             } else {
-                console.log('📱 [DUAL-SAVE] Offline mode - Only saved to LOCAL storage');
+                console.log('📱 Step 2: Offline mode - Only saved to LOCAL storage');
             }
 
-            if (API_BASE_URL !== 'demo' && isOnlineMode) {
-                console.log('📦 [DUAL-SAVE] Step 3: Updating server stocks...');
-
-                for (const cartItem of cart) {
-                    const currentItem = menuItems.find(item => item.id === cartItem.id);
-                    if (currentItem && !currentItem.isOffline) {
-                        const newStocks = currentItem.stocks;
-                        const newSales = (currentItem as any).sales + cartItem.quantity || cartItem.quantity;
-
-                        try {
-                            const response = await fetch(`${API_BASE_URL}/items.php`, {
-                                method: 'PUT',
-                                headers: {
-                                    'Content-Type': 'application/json',
-                                },
-                                body: JSON.stringify({
-                                    id: cartItem.id,
-                                    stocks: newStocks,
-                                    sales: newSales
-                                }),
-                            });
-
-                            const result = await response.json();
-                            if (!result.success) {
-                                console.error('❌ Failed to update server item stocks:', cartItem.id);
-                            } else {
-                                console.log('✅ Updated server stocks for:', cartItem.name);
-                            }
-                        } catch (stockError) {
-                            console.error('❌ Error updating server stocks:', stockError);
-                        }
-                    }
-                }
-                console.log('✅ [DUAL-SAVE] Step 3 COMPLETE: Server stocks updated');
-            }
-
+            // Show receipt modal
             setCurrentReceipt(receiptData);
             setShowReceiptModal(true);
-
-            console.log('🎉 [DUAL-SAVE] ORDER PROCESS COMPLETED SUCCESSFULLY!');
 
         } catch (error) {
             console.error('❌ Error placing order:', error);
@@ -501,7 +531,7 @@ export default function PosScreen() {
                 subtotal: subtotal,
                 total: total,
                 timestamp: new Date().toLocaleString(),
-                status: 'unpaid'
+                status: 'unpaid' // CHANGE FROM 'paid' TO 'unpaid'
             };
             setCurrentReceipt(receiptData);
             setShowReceiptModal(true);
@@ -518,22 +548,21 @@ export default function PosScreen() {
             setShowReceiptModal(false);
             setCart([]);
             setCustomerName('');
+
+            // Reload menu items to reflect updated stocks
+            loadMenuItems();
         }, 2000);
     };
 
     const getImageSource = (item: MenuItem) => {
-        if (!item.image) return null;
-
-        if (typeof item.image === 'string') {
-            if (apiBaseUrl === 'demo' || item.isOffline) {
-                return null;
-            }
-            const serverIP = apiBaseUrl.replace('http://', '').replace('/backend/api', '');
-            return { uri: `http://${serverIP}/backend/uploads/${item.image}` };
-        } else {
-            return item.image;
+        if (item.image_base64) {
+            return { uri: item.image_base64 };
         }
+        return null;
     };
+
+    // ... (keep all the render methods and JSX the same as your original code)
+    // The rest of the component (renderMenuItems, JSX, and styles) remains exactly the same
 
     const renderMenuItems = () => {
         if (loading) {
@@ -679,7 +708,7 @@ export default function PosScreen() {
 
                         <ThemedText style={styles.modeInfo}>
                             {isOnlineMode
-                                ? 'Connected to server'
+                                ? 'Connected to Firebase'
                                 : 'Using local storage'
                             }
                         </ThemedText>

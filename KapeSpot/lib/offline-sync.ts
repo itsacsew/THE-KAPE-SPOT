@@ -3,10 +3,23 @@ import * as SecureStore from 'expo-secure-store';
 import { NetworkScanner } from './network-scanner';
 import { Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+    getFirestore,
+    collection,
+    addDoc,
+    updateDoc,
+    doc,
+    getDocs,
+    query,
+    where,
+    deleteDoc,
+    orderBy
+} from 'firebase/firestore';
+import { app } from './firebase-config';
 
 interface PendingItem {
   id: string;
-  type: 'CREATE_ITEM' | 'UPDATE_ITEM' | 'DELETE_ITEM' | 'CREATE_CATEGORY' | 'UPDATE_CATEGORY' | 'DELETE_CATEGORY';
+  type: 'CREATE_ITEM' | 'UPDATE_ITEM' | 'DELETE_ITEM' | 'CREATE_CATEGORY' | 'UPDATE_CATEGORY' | 'DELETE_CATEGORY' | 'CREATE_ORDER' | 'UPDATE_ORDER';
   data: any;
   timestamp: number;
   retryCount: number;
@@ -21,6 +34,7 @@ interface ReceiptData {
   total: number;
   timestamp: string;
   status: 'unpaid' | 'paid' | 'cancelled';
+  firebaseId?: string;
 }
 
 interface Category {
@@ -35,6 +49,7 @@ interface Category {
   lastUpdated?: number;
   serverId?: string;
   lastSynced?: number;
+  firebaseId?: string;
 }
 
 // ADD CUPITEM INTERFACE HERE
@@ -64,6 +79,7 @@ export class OfflineSyncService {
     lastSyncAttempt: null
   };
   private syncListeners: ((status: SyncStatus) => void)[] = [];
+  private db = getFirestore(app);
 
   private constructor() {
     this.initializeSync();
@@ -105,24 +121,24 @@ export class OfflineSyncService {
       }
     }, 30000);
 
-    console.log('🔄 OfflineSync Service Initialized');
+    console.log('🔄 OfflineSync Service Initialized with Firebase');
     this.checkNetworkStatus();
   }
 
-  // Check if we have internet connection
+  // Check if we have Firebase connection
   private async checkNetworkStatus(): Promise<void> {
     try {
-      const serverIP = await NetworkScanner.findServerIP();
+      const connectionMode = await NetworkScanner.getApiBaseUrl();
       const wasOnline = this.syncStatus.isOnline;
-      const isNowOnline = serverIP !== 'demo';
+      const isNowOnline = connectionMode === 'online';
       
       this.syncStatus.isOnline = isNowOnline;
       
       if (!wasOnline && isNowOnline) {
-        console.log('📡 Internet connection restored - starting sync');
+        console.log('🔥 Firebase connection restored - starting sync');
         this.trySync();
       } else if (wasOnline && !isNowOnline) {
-        console.log('📡 Internet connection lost');
+        console.log('📱 Firebase connection lost');
       }
       
       this.notifyListeners();
@@ -325,7 +341,7 @@ export class OfflineSyncService {
     }
   }
 
-  // Sync pending items with server (ONLY WHEN ONLINE)
+  // Sync pending items with Firebase Firestore (ONLY WHEN ONLINE)
   async trySync(): Promise<void> {
     if (this.syncInProgress) {
         console.log('⏸️ Sync already in progress, skipping...');
@@ -333,7 +349,7 @@ export class OfflineSyncService {
     }
 
     if (!this.syncStatus.isOnline) {
-        console.log('📡 No internet connection - cannot sync');
+        console.log('📱 No Firebase connection - cannot sync');
         await this.updateSyncStatus({ 
             lastSyncAttempt: Date.now() 
         });
@@ -346,13 +362,13 @@ export class OfflineSyncService {
         lastSyncAttempt: Date.now()
     });
     
-    console.log('🔄 Starting sync process...');
+    console.log('🔄 Starting Firebase sync process...');
 
     try {
-        const apiBaseUrl = await NetworkScanner.findServerIP();
+        const connectionMode = await NetworkScanner.getApiBaseUrl();
         
-        if (apiBaseUrl === 'demo') {
-            console.log('🎮 Demo mode - clearing pending items');
+        if (connectionMode === 'offline') {
+            console.log('📱 Demo mode - clearing pending items');
             await this.setItem('pendingItems', '[]');
             await this.updateSyncStatus({ 
                 isSyncing: false, 
@@ -362,7 +378,6 @@ export class OfflineSyncService {
             return;
         }
 
-        const baseUrl = `http://${apiBaseUrl}/backend/api`;
         const pendingItems = await this.getPendingItems();
         
         if (pendingItems.length === 0) {
@@ -374,7 +389,7 @@ export class OfflineSyncService {
             return;
         }
 
-        console.log('📤 Syncing', pendingItems.length, 'pending items to server...');
+        console.log('📤 Syncing', pendingItems.length, 'pending items to Firebase...');
 
         let successCount = 0;
         let failCount = 0;
@@ -386,274 +401,268 @@ export class OfflineSyncService {
                 console.log(`🔄 Syncing item: ${pendingItem.data.name} (Attempt: ${pendingItem.retryCount + 1})`);
 
                 let success = false;
-                let serverId: string | number | null = null;
+                let firebaseId: string | null = null;
 
                 switch (pendingItem.type) {
                     case 'CREATE_ITEM':
-                        const response = await fetch(`${baseUrl}/items.php`, {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                            },
-                            body: JSON.stringify(pendingItem.data),
+                        console.log('🔥 Creating item in Firebase:', pendingItem.data.name);
+                        
+                        // Prepare item data for Firebase
+                        const itemData = {
+                            code: pendingItem.data.code,
+                            name: pendingItem.data.name,
+                            price: Number(pendingItem.data.price) || 0,
+                            category: pendingItem.data.category || 'Uncategorized',
+                            stocks: Number(pendingItem.data.stocks) || 0,
+                            status: pendingItem.data.status !== false,
+                            image_base64: pendingItem.data.image_base64 || null,
+                            has_image: pendingItem.data.has_image || false,
+                            sales: Number(pendingItem.data.sales) || 0,
+                            created_at: new Date().toISOString(),
+                            updated_at: new Date().toISOString()
+                        };
+
+                        const docRef = await addDoc(collection(this.db, 'items'), itemData);
+                        firebaseId = docRef.id;
+                        
+                        console.log('✅ Item created in Firebase:', {
+                            name: pendingItem.data.name,
+                            firebaseId: firebaseId
                         });
 
-                        // Check if response is OK first
-                        if (!response.ok) {
-                            // Handle specific HTTP errors
-                            if (response.status === 409) {
-                                console.log(`⚠️ Item already exists on server: ${pendingItem.data.name}`);
-                                
-                                // Try to get the existing item from server and update local storage
-                                try {
-                                    const existingItemsResponse = await fetch(`${baseUrl}/items.php`);
-                                    if (existingItemsResponse.ok) {
-                                        const existingItems = await existingItemsResponse.json();
-                                        const existingItem = existingItems.find((item: any) => 
-                                            item.code === pendingItem.data.code || 
-                                            item.name === pendingItem.data.name
-                                        );
-                                        
-                                        if (existingItem) {
-                                            // Update local storage with existing server item
-                                            const localItems = await this.getLocalItems();
-                                            const updatedItems = localItems.map(item => 
-                                                item.id === pendingItem.id 
-                                                    ? { 
-                                                        ...item, 
-                                                        id: String(existingItem.id), 
-                                                        isOffline: false, 
-                                                        syncStatus: 'synced',
-                                                        serverId: String(existingItem.id),
-                                                        lastSynced: Date.now()
-                                                    }
-                                                    : item
-                                            );
-                                            await this.setItem('localItems', JSON.stringify(updatedItems));
-                                            console.log('✅ Updated local item with existing server item:', pendingItem.data.name);
-                                            success = true;
-                                            successCount++;
-                                            
-                                            // Remove from pending items array
-                                            const index = updatedPendingItems.findIndex(item => item.id === pendingItem.id);
-                                            if (index !== -1) {
-                                                updatedPendingItems.splice(index, 1);
-                                            }
-                                        } else {
-                                            throw new Error('Existing item not found on server');
-                                        }
-                                    }
-                                } catch (updateError) {
-                                    console.log('❌ Failed to update local item with server data:', updateError);
-                                    // Mark as duplicate and remove from pending
-                                    console.log(`🗑️ Removing duplicate item from sync queue: ${pendingItem.data.name}`);
-                                    const index = updatedPendingItems.findIndex(item => item.id === pendingItem.id);
-                                    if (index !== -1) {
-                                        updatedPendingItems.splice(index, 1);
-                                    }
-                                    successCount++; // Count as "success" since we handled the duplicate
+                        // Update local storage with Firebase ID
+                        const localItems = await this.getLocalItems();
+                        const updatedItems = localItems.map(item => 
+                            item.id === pendingItem.id 
+                                ? { 
+                                    ...item, 
+                                    id: firebaseId, 
+                                    firebaseId: firebaseId,
+                                    isOffline: false, 
+                                    syncStatus: 'synced',
+                                    lastSynced: Date.now()
                                 }
-                                break;
-                            }
-                            throw new Error(`HTTP error! status: ${response.status}`);
+                                : item
+                        );
+                        await this.setItem('localItems', JSON.stringify(updatedItems));
+                        
+                        success = true;
+                        successCount++;
+                        
+                        // Remove from pending items array
+                        const index = updatedPendingItems.findIndex(item => item.id === pendingItem.id);
+                        if (index !== -1) {
+                            updatedPendingItems.splice(index, 1);
                         }
+                        break;
 
-                        const responseText = await response.text();
-                        console.log('📄 Server response:', responseText);
-
-                        let result;
-                        try {
-                            result = JSON.parse(responseText);
-                        } catch (parseError) {
-                            console.error('❌ Failed to parse JSON response:', parseError);
-                            throw new Error('Invalid JSON response from server');
-                        }
-
-                        success = result.success === true || result.success === 'true';
-                        serverId = result.item_id || result.id;
-
-                        if (success && serverId) {
-                            // Update local storage with server ID
-                            const localItems = await this.getLocalItems();
-                            const updatedItems = localItems.map(item => 
-                                item.id === pendingItem.id 
-                                    ? { 
-                                        ...item, 
-                                        id: String(serverId), 
-                                        isOffline: false, 
-                                        syncStatus: 'synced',
-                                        serverId: String(serverId),
-                                        lastSynced: Date.now()
-                                    }
-                                    : item
-                            );
-                            await this.setItem('localItems', JSON.stringify(updatedItems));
-                            console.log('✅ Item synced successfully:', pendingItem.data.name);
+                    case 'UPDATE_ITEM':
+                        console.log('🔥 Updating item in Firebase:', pendingItem.data.name);
+                        
+                        if (pendingItem.data.firebaseId) {
+                            const itemDoc = doc(this.db, 'items', pendingItem.data.firebaseId);
+                            await updateDoc(itemDoc, {
+                                code: pendingItem.data.code,
+                                name: pendingItem.data.name,
+                                price: Number(pendingItem.data.price) || 0,
+                                category: pendingItem.data.category || 'Uncategorized',
+                                stocks: Number(pendingItem.data.stocks) || 0,
+                                status: pendingItem.data.status !== false,
+                                updated_at: new Date().toISOString()
+                            });
+                            
+                            console.log('✅ Item updated in Firebase:', pendingItem.data.name);
+                            success = true;
                             successCount++;
                             
                             // Remove from pending items array
-                            const index = updatedPendingItems.findIndex(item => item.id === pendingItem.id);
-                            if (index !== -1) {
-                                updatedPendingItems.splice(index, 1);
+                            const updateIndex = updatedPendingItems.findIndex(item => item.id === pendingItem.id);
+                            if (updateIndex !== -1) {
+                                updatedPendingItems.splice(updateIndex, 1);
                             }
                         } else {
-                            console.log('❌ Server rejected item:', pendingItem.data.name, result.message);
-                            // Increment retry count for this item
+                            console.log('❌ No Firebase ID for update:', pendingItem.data.name);
+                            updatedPendingItems[i].retryCount += 1;
+                            failCount++;
+                        }
+                        break;
+
+                    case 'DELETE_ITEM':
+                        console.log('🔥 Deleting item from Firebase:', pendingItem.data.name);
+                        
+                        if (pendingItem.data.firebaseId) {
+                            const itemDoc = doc(this.db, 'items', pendingItem.data.firebaseId);
+                            await deleteDoc(itemDoc);
+                            
+                            console.log('✅ Item deleted from Firebase:', pendingItem.data.name);
+                            success = true;
+                            successCount++;
+                            
+                            // Remove from pending items array
+                            const deleteIndex = updatedPendingItems.findIndex(item => item.id === pendingItem.id);
+                            if (deleteIndex !== -1) {
+                                updatedPendingItems.splice(deleteIndex, 1);
+                            }
+                        } else {
+                            console.log('❌ No Firebase ID for delete:', pendingItem.data.name);
                             updatedPendingItems[i].retryCount += 1;
                             failCount++;
                         }
                         break;
 
                     case 'CREATE_CATEGORY':
-                        const categoryResponse = await fetch(`${baseUrl}/categories.php`, {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                            },
-                            body: JSON.stringify(pendingItem.data),
+                        console.log('🔥 Creating category in Firebase:', pendingItem.data.name);
+                        
+                        const categoryData = {
+                            name: pendingItem.data.name,
+                            icon: pendingItem.data.icon || 'folder',
+                            items_count: Number(pendingItem.data.items_count) || 0,
+                            created_at: new Date().toISOString(),
+                            updated_at: new Date().toISOString()
+                        };
+
+                        const categoryDocRef = await addDoc(collection(this.db, 'categories'), categoryData);
+                        const categoryFirebaseId = categoryDocRef.id;
+                        
+                        console.log('✅ Category created in Firebase:', {
+                            name: pendingItem.data.name,
+                            firebaseId: categoryFirebaseId
                         });
 
-                        if (!categoryResponse.ok) {
-                            // Handle category conflicts
-                            if (categoryResponse.status === 409) {
-                                console.log(`⚠️ Category already exists on server: ${pendingItem.data.name}`);
-                                
-                                // Try to get the existing category from server
-                                try {
-                                    const existingCategoriesResponse = await fetch(`${baseUrl}/categories.php`);
-                                    if (existingCategoriesResponse.ok) {
-                                        const existingCategories = await existingCategoriesResponse.json();
-                                        const existingCategory = existingCategories.find((cat: any) => 
-                                            cat.name === pendingItem.data.name
-                                        );
-                                        
-                                        if (existingCategory) {
-                                            // Update local storage with existing server category
-                                            const localCategories = await this.getLocalCategories();
-                                            const updatedCategories = localCategories.map(cat => 
-                                                cat.id === pendingItem.id 
-                                                    ? { 
-                                                        ...cat, 
-                                                        id: String(existingCategory.id), 
-                                                        isOffline: false, 
-                                                        syncStatus: 'synced',
-                                                        serverId: String(existingCategory.id),
-                                                        lastSynced: Date.now()
-                                                    }
-                                                    : cat
-                                            );
-                                            await this.setItem('localCategories', JSON.stringify(updatedCategories));
-                                            console.log('✅ Updated local category with existing server category:', pendingItem.data.name);
-                                            success = true;
-                                            successCount++;
-                                            
-                                            // Remove from pending items array
-                                            const index = updatedPendingItems.findIndex(item => item.id === pendingItem.id);
-                                            if (index !== -1) {
-                                                updatedPendingItems.splice(index, 1);
-                                            }
-                                        }
-                                    }
-                                } catch (updateError) {
-                                    console.log('❌ Failed to update local category with server data:', updateError);
-                                    // Remove duplicate category from pending
-                                    console.log(`🗑️ Removing duplicate category from sync queue: ${pendingItem.data.name}`);
-                                    const index = updatedPendingItems.findIndex(item => item.id === pendingItem.id);
-                                    if (index !== -1) {
-                                        updatedPendingItems.splice(index, 1);
-                                    }
-                                    successCount++;
+                        // Update local storage with Firebase ID
+                        const localCategories = await this.getLocalCategories();
+                        const updatedCategories = localCategories.map(cat => 
+                            cat.id === pendingItem.id 
+                                ? { 
+                                    ...cat, 
+                                    id: categoryFirebaseId, 
+                                    firebaseId: categoryFirebaseId,
+                                    isOffline: false, 
+                                    syncStatus: 'synced',
+                                    lastSynced: Date.now()
                                 }
-                                break;
-                            }
-                            throw new Error(`HTTP error! status: ${categoryResponse.status}`);
+                                : cat
+                        );
+                        await this.setItem('localCategories', JSON.stringify(updatedCategories));
+                        
+                        success = true;
+                        successCount++;
+                        
+                        // Remove from pending items array
+                        const catIndex = updatedPendingItems.findIndex(item => item.id === pendingItem.id);
+                        if (catIndex !== -1) {
+                            updatedPendingItems.splice(catIndex, 1);
                         }
+                        break;
 
-                        const categoryResponseText = await categoryResponse.text();
-                        console.log('📄 Category server response:', categoryResponseText);
-
-                        let categoryResult;
-                        try {
-                            categoryResult = JSON.parse(categoryResponseText);
-                        } catch (parseError) {
-                            console.error('❌ Failed to parse category JSON response:', parseError);
-                            throw new Error('Invalid JSON response from server for category');
-                        }
-
-                        const categorySuccess = categoryResult.success === true || categoryResult.success === 'true';
-                        const categoryServerId = categoryResult.category_id || categoryResult.id;
-
-                        if (categorySuccess && categoryServerId) {
-                            // Update local storage with server ID
-                            const localCategories = await this.getLocalCategories();
-                            const updatedCategories = localCategories.map(cat => 
-                                cat.id === pendingItem.id 
-                                    ? { 
-                                        ...cat, 
-                                        id: String(categoryServerId), 
-                                        isOffline: false, 
-                                        syncStatus: 'synced',
-                                        serverId: String(categoryServerId),
-                                        lastSynced: Date.now()
-                                    }
-                                    : cat
-                            );
-                            await this.setItem('localCategories', JSON.stringify(updatedCategories));
-                            console.log('✅ Category synced successfully:', pendingItem.data.name);
+                    case 'UPDATE_CATEGORY':
+                        console.log('🔥 Updating category in Firebase:', pendingItem.data.name);
+                        
+                        if (pendingItem.data.firebaseId) {
+                            const categoryDoc = doc(this.db, 'categories', pendingItem.data.firebaseId);
+                            await updateDoc(categoryDoc, {
+                                name: pendingItem.data.name,
+                                icon: pendingItem.data.icon || 'folder',
+                                items_count: Number(pendingItem.data.items_count) || 0,
+                                updated_at: new Date().toISOString()
+                            });
+                            
+                            console.log('✅ Category updated in Firebase:', pendingItem.data.name);
+                            success = true;
                             successCount++;
                             
                             // Remove from pending items array
-                            const index = updatedPendingItems.findIndex(item => item.id === pendingItem.id);
-                            if (index !== -1) {
-                                updatedPendingItems.splice(index, 1);
+                            const updateCatIndex = updatedPendingItems.findIndex(item => item.id === pendingItem.id);
+                            if (updateCatIndex !== -1) {
+                                updatedPendingItems.splice(updateCatIndex, 1);
                             }
                         } else {
-                            console.log('❌ Server rejected category:', pendingItem.data.name, categoryResult.message);
+                            console.log('❌ No Firebase ID for category update:', pendingItem.data.name);
                             updatedPendingItems[i].retryCount += 1;
                             failCount++;
                         }
                         break;
 
                     case 'DELETE_CATEGORY':
-                        console.log('🗑️ [SYNC] Deleting category from server:', pendingItem.data.name);
+                        console.log('🔥 Deleting category from Firebase:', pendingItem.data.name);
                         
-                        const deleteResponse = await fetch(`${baseUrl}/categories.php?id=${pendingItem.data.id}`, {
-                            method: 'DELETE',
-                        });
-
-                        if (!deleteResponse.ok) {
-                            throw new Error(`HTTP error! status: ${deleteResponse.status}`);
-                        }
-
-                        const deleteResult = await deleteResponse.json();
-                        const deleteSuccess = deleteResult.success === true || deleteResult.success === 'true';
-
-                        if (deleteSuccess) {
-                            console.log('✅ Category deleted successfully from server:', pendingItem.data.name);
+                        if (pendingItem.data.firebaseId) {
+                            const categoryDoc = doc(this.db, 'categories', pendingItem.data.firebaseId);
+                            await deleteDoc(categoryDoc);
+                            
+                            console.log('✅ Category deleted from Firebase:', pendingItem.data.name);
+                            success = true;
                             successCount++;
                             
                             // Remove from pending items array
-                            const index = updatedPendingItems.findIndex(item => item.id === pendingItem.id);
-                            if (index !== -1) {
-                                updatedPendingItems.splice(index, 1);
+                            const deleteCatIndex = updatedPendingItems.findIndex(item => item.id === pendingItem.id);
+                            if (deleteCatIndex !== -1) {
+                                updatedPendingItems.splice(deleteCatIndex, 1);
                             }
                         } else {
-                            throw new Error(deleteResult.message || 'Server returned success: false');
+                            console.log('❌ No Firebase ID for category delete:', pendingItem.data.name);
+                            updatedPendingItems[i].retryCount += 1;
+                            failCount++;
+                        }
+                        break;
+
+                    case 'CREATE_ORDER':
+                        console.log('🔥 Creating order in Firebase:', pendingItem.data.orderId);
+                        
+                        const orderData = {
+                            orderId: pendingItem.data.orderId,
+                            customerName: pendingItem.data.customerName,
+                            items: pendingItem.data.items,
+                            subtotal: Number(pendingItem.data.subtotal) || 0,
+                            total: Number(pendingItem.data.total) || 0,
+                            status: pendingItem.data.status || 'unpaid',
+                            timestamp: pendingItem.data.timestamp,
+                            created_at: new Date().toISOString()
+                        };
+
+                        const orderDocRef = await addDoc(collection(this.db, 'orders'), orderData);
+                        const orderFirebaseId = orderDocRef.id;
+                        
+                        console.log('✅ Order created in Firebase:', {
+                            orderId: pendingItem.data.orderId,
+                            firebaseId: orderFirebaseId
+                        });
+
+                        // Update local storage with Firebase ID
+                        const pendingReceipts = await this.getPendingReceipts();
+                        const updatedReceipts = pendingReceipts.map(receipt => 
+                            receipt.orderId === pendingItem.data.orderId 
+                                ? { 
+                                    ...receipt, 
+                                    firebaseId: orderFirebaseId,
+                                    syncStatus: 'synced'
+                                }
+                                : receipt
+                        );
+                        await this.setItem('pendingReceipts', JSON.stringify(updatedReceipts));
+                        
+                        success = true;
+                        successCount++;
+                        
+                        // Remove from pending items array
+                        const orderIndex = updatedPendingItems.findIndex(item => item.id === pendingItem.id);
+                        if (orderIndex !== -1) {
+                            updatedPendingItems.splice(orderIndex, 1);
                         }
                         break;
                 }
 
             } catch (error) {
-                
+                console.error(`❌ Error syncing item ${pendingItem.data.name}:`, error);
                 updatedPendingItems[i].retryCount += 1;
                 failCount++;
             }
 
-            // Small delay between requests to avoid overwhelming the server
-            await new Promise(resolve => setTimeout(resolve, 100));
+            // Small delay between requests to avoid overwhelming Firebase
+            await new Promise(resolve => setTimeout(resolve, 500));
         }
 
-        // Remove items that have exceeded max retries (10 instead of 5 for more tolerance)
+        // Remove items that have exceeded max retries
         const finalPendingItems = updatedPendingItems.filter(item => item.retryCount <= 10);
         
         // Save the updated pending items back to storage
@@ -668,7 +677,7 @@ export class OfflineSyncService {
 
         await this.setItem('lastSync', Date.now().toString());
 
-        console.log('📊 Sync completed:', {
+        console.log('📊 Firebase sync completed:', {
             successful: successCount,
             failed: failCount,
             remaining: finalPendingItems.length,
@@ -681,7 +690,7 @@ export class OfflineSyncService {
         }
 
     } catch (error) {
-        console.error('❌ Sync process failed:', error);
+        console.error('❌ Firebase sync process failed:', error);
         await this.updateSyncStatus({ 
             isSyncing: false,
             lastSyncAttempt: Date.now()
@@ -701,8 +710,8 @@ export class OfflineSyncService {
     console.log('👆 Manual sync triggered by user');
     
     if (!this.syncStatus.isOnline) {
-      console.log('📡 Cannot sync - no internet connection');
-      Alert.alert('Offline', 'Cannot sync without internet connection');
+      console.log('📱 Cannot sync - no Firebase connection');
+      Alert.alert('Offline', 'Cannot sync without Firebase connection');
       return;
     }
     
@@ -1036,8 +1045,6 @@ async getPendingCategories(): Promise<any[]> {
   }
 }
 
-// Add to OfflineSyncService class in offline-sync.ts
-
 // Method to get pending receipts from local storage
 async getPendingReceipts(): Promise<ReceiptData[]> {
   try {
@@ -1100,6 +1107,7 @@ async clearDuplicatePendingItems(): Promise<void> {
       console.error('❌ Error clearing duplicate pending items:', error);
   }
 }
+
 async removeDuplicateItems(): Promise<void> {
     try {
         const localItems = await this.getLocalItems();
@@ -1148,4 +1156,75 @@ async removeDuplicateItems(): Promise<void> {
     }
 }
 
+// Add order to pending sync
+async addPendingOrder(orderData: ReceiptData): Promise<void> {
+    try {
+        const pendingItem: PendingItem = {
+            id: orderData.orderId,
+            type: 'CREATE_ORDER',
+            data: orderData,
+            timestamp: Date.now(),
+            retryCount: 0
+        };
+
+        const pendingItems = await this.getPendingItems();
+        pendingItems.push(pendingItem);
+        await this.setItem('pendingItems', JSON.stringify(pendingItems));
+        
+        await this.updateSyncStatus({ 
+            pendingItems: pendingItems.length,
+            lastSyncAttempt: Date.now()
+        });
+        
+        console.log('📬 Order added to pending sync queue:', orderData.orderId);
+    } catch (error) {
+        console.error('❌ Error adding order to pending sync:', error);
+    }
+}
+
+// Sync specific order to Firebase
+async syncOrderToFirebase(orderData: ReceiptData): Promise<boolean> {
+    try {
+        console.log('🔥 Syncing order to Firebase:', orderData.orderId);
+        
+        const orderDataForFirebase = {
+            orderId: orderData.orderId,
+            customerName: orderData.customerName,
+            items: orderData.items.map(item => ({
+                id: item.id,
+                name: item.name,
+                price: item.price,
+                quantity: item.quantity,
+                total: item.price * item.quantity
+            })),
+            subtotal: orderData.subtotal,
+            total: orderData.total,
+            status: orderData.status,
+            timestamp: orderData.timestamp,
+            created_at: new Date().toISOString()
+        };
+
+        const docRef = await addDoc(collection(this.db, 'orders'), orderDataForFirebase);
+        const firebaseId = docRef.id;
+
+        console.log('✅ Order synced to Firebase:', {
+            orderId: orderData.orderId,
+            firebaseId: firebaseId
+        });
+
+        // Update local storage with Firebase ID
+        const pendingReceipts = await this.getPendingReceipts();
+        const updatedReceipts = pendingReceipts.map(receipt => 
+            receipt.orderId === orderData.orderId 
+                ? { ...receipt, firebaseId: firebaseId }
+                : receipt
+        );
+        await this.setItem('pendingReceipts', JSON.stringify(updatedReceipts));
+
+        return true;
+    } catch (error) {
+        console.error('❌ Error syncing order to Firebase:', error);
+        return false;
+    }
+}
 }

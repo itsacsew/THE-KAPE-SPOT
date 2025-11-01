@@ -17,6 +17,15 @@ import { NetworkScanner } from '@/lib/network-scanner';
 import { useFocusEffect } from '@react-navigation/native';
 import React from 'react';
 import { OfflineSyncService } from '@/lib/offline-sync';
+import {
+    getFirestore,
+    collection,
+    getDocs,
+    query,
+    where,
+    orderBy
+} from 'firebase/firestore';
+import { app } from '@/lib/firebase-config';
 
 interface OrderData {
     orderId: string;
@@ -26,6 +35,7 @@ interface OrderData {
     total: number;
     timestamp: string;
     status: 'unpaid' | 'paid' | 'cancelled';
+    firebaseId?: string;
 }
 
 const { width } = Dimensions.get('window');
@@ -38,21 +48,21 @@ export default function LogScreen() {
     const [isOnlineMode, setIsOnlineMode] = useState<boolean>(false);
     const [selectedOrder, setSelectedOrder] = useState<OrderData | null>(null);
     const [showOrderModal, setShowOrderModal] = useState(false);
-    const [filter, setFilter] = useState<'all' | 'paid' | 'cancelled'>('all');
+    const [filter, setFilter] = useState<'all' | 'paid'>('all'); // Remove 'cancelled' from filter
 
-    const getApiBaseUrl = async (): Promise<string> => {
+    // Initialize Firebase
+    const db = getFirestore(app);
+
+    const getConnectionMode = async (): Promise<'online' | 'offline'> => {
         try {
-            const serverIP = await NetworkScanner.findServerIP();
-            if (serverIP === 'demo' || serverIP === 'local') {
-                setIsOnlineMode(false);
-                return 'local';
-            }
-            const baseUrl = `http://${serverIP}/backend/api`;
-            setIsOnlineMode(true);
-            return baseUrl;
+            const mode = await NetworkScanner.getApiBaseUrl();
+            const isOnline = mode === 'online';
+            setIsOnlineMode(isOnline);
+            return mode;
         } catch (error) {
+            console.log('❌ Error checking connection mode:', error);
             setIsOnlineMode(false);
-            return 'local';
+            return 'offline';
         }
     };
 
@@ -60,65 +70,72 @@ export default function LogScreen() {
         setLoading(true);
         try {
             const syncService = OfflineSyncService.getInstance();
-            const API_BASE_URL = await getApiBaseUrl();
+            const connectionMode = await getConnectionMode();
 
             let allOrders: OrderData[] = [];
 
-            if (API_BASE_URL === 'local') {
-                // Load from local storage - GET ALL ORDERS INCLUDING PAID AND CANCELLED
-                console.log('📱 Loading all orders from local storage...');
+            if (connectionMode === 'offline') {
+                // Load from local storage - PAID ORDERS ONLY
+                console.log('📱 Loading paid orders from local storage...');
                 const localOrders = await syncService.getPendingReceipts();
-                allOrders = localOrders.filter(order => order.status === 'paid' || order.status === 'cancelled');
-                console.log('📱 Local paid/cancelled orders loaded:', allOrders.length);
+                allOrders = localOrders.filter(order => order.status === 'paid'); // Paid only
+                console.log('📱 Local paid orders loaded:', allOrders.length);
             } else {
-                // Load from server
+                // Load from Firebase Firestore - PAID ORDERS ONLY
                 try {
-                    console.log('🌐 Loading all orders from server...');
-                    const response = await fetch(`${API_BASE_URL}/orders.php`);
+                    console.log('🔥 Loading paid orders from Firebase...');
 
-                    if (response.ok) {
-                        const serverOrders = await response.json();
-                        console.log('🌐 Server orders response:', serverOrders);
+                    // Query orders collection where status is 'paid' ONLY
+                    const ordersCollection = collection(db, 'orders');
+                    const ordersQuery = query(
+                        ordersCollection,
+                        where('status', '==', 'paid'), // Paid only
+                        orderBy('timestamp', 'desc')
+                    );
 
-                        allOrders = serverOrders
-                            .map((order: any) => ({
-                                orderId: order.order_id || order.orderId,
-                                customerName: order.customer_name || order.customerName,
-                                items: order.items || [],
-                                subtotal: parseFloat(order.subtotal) || 0,
-                                total: parseFloat(order.total) || 0,
-                                timestamp: order.created_at || order.timestamp,
-                                status: order.status || 'unpaid'
-                            }))
-                            .filter((order: OrderData) => order.status === 'paid' || order.status === 'cancelled');
+                    const ordersSnapshot = await getDocs(ordersQuery);
 
-                        console.log('🌐 Server paid/cancelled orders loaded:', allOrders.length);
-                    } else {
-                        throw new Error('Server response not OK');
-                    }
-                } catch (serverError) {
-                    console.log('⚠️ Failed to load from server, falling back to local storage:', serverError);
-                    // Fallback to local storage
+                    const firebaseOrders: OrderData[] = ordersSnapshot.docs.map(doc => {
+                        const data = doc.data();
+                        return {
+                            orderId: data.orderId || doc.id,
+                            customerName: data.customerName || 'Unknown Customer',
+                            items: data.items || [],
+                            subtotal: Number(data.subtotal) || 0,
+                            total: Number(data.total) || 0,
+                            timestamp: data.timestamp || data.created_at || new Date().toISOString(),
+                            status: data.status || 'unpaid',
+                            firebaseId: doc.id
+                        };
+                    });
+
+                    allOrders = firebaseOrders;
+                    console.log('🔥 Firebase paid orders loaded:', allOrders.length);
+
+                } catch (firebaseError) {
+                    console.log('⚠️ Failed to load from Firebase, falling back to local storage:', firebaseError);
+
+                    // Fallback to local storage - PAID ORDERS ONLY
                     const localOrders = await syncService.getPendingReceipts();
-                    allOrders = localOrders.filter(order => order.status === 'paid' || order.status === 'cancelled');
-                    console.log('📱 Fallback to local paid/cancelled orders:', allOrders.length);
+                    allOrders = localOrders.filter(order => order.status === 'paid'); // Paid only
+                    console.log('📱 Fallback to local paid orders:', allOrders.length);
                 }
             }
 
             // Sort by timestamp (newest first)
             allOrders.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
             setOrders(allOrders);
-            console.log('✅ Final loaded paid/cancelled orders:', allOrders.length);
+            console.log('✅ Final loaded paid orders:', allOrders.length);
 
         } catch (error) {
             console.error('❌ Error loading orders:', error);
-            // Final fallback - try to get from local storage
+            // Final fallback - try to get from local storage - PAID ORDERS ONLY
             const syncService = OfflineSyncService.getInstance();
             const localOrders = await syncService.getPendingReceipts();
-            const filteredOrders = localOrders.filter(order => order.status === 'paid' || order.status === 'cancelled');
+            const filteredOrders = localOrders.filter(order => order.status === 'paid'); // Paid only
             filteredOrders.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
             setOrders(filteredOrders);
-            console.log('📱 Emergency fallback to local paid/cancelled orders:', filteredOrders.length);
+            console.log('📱 Emergency fallback to local paid orders:', filteredOrders.length);
         } finally {
             setLoading(false);
         }
@@ -150,7 +167,6 @@ export default function LogScreen() {
     const getStatusColor = (status: string) => {
         switch (status) {
             case 'paid': return '#16A34A';
-            case 'cancelled': return '#DC2626';
             default: return '#D97706';
         }
     };
@@ -158,7 +174,6 @@ export default function LogScreen() {
     const getStatusIcon = (status: string) => {
         switch (status) {
             case 'paid': return 'check-circle';
-            case 'cancelled': return 'x-circle';
             default: return 'clock';
         }
     };
@@ -224,10 +239,10 @@ export default function LogScreen() {
                             </ThemedView>
 
                             <ThemedText style={styles.modeInfo}>
-                                {isOnlineMode ? '🌐 Connected to server - Showing online data' : '📱 Using local storage - Showing local data'}
+                                {isOnlineMode ? '🔥 Connected to Firebase - Showing online data' : '📱 Using local storage - Showing local data'}
                             </ThemedText>
 
-                            {/* Filter Buttons */}
+                            {/* Filter Buttons - PAID ONLY */}
                             <ThemedView style={styles.filterContainer}>
                                 <TouchableOpacity
                                     style={[styles.filterButton, filter === 'all' && styles.filterButtonActive]}
@@ -244,15 +259,6 @@ export default function LogScreen() {
                                     <Feather name="check-circle" size={14} color={filter === 'paid' ? '#FFFEEA' : '#16A34A'} />
                                     <ThemedText style={[styles.filterButtonText, filter === 'paid' && styles.filterButtonTextActive]}>
                                         PAID
-                                    </ThemedText>
-                                </TouchableOpacity>
-                                <TouchableOpacity
-                                    style={[styles.filterButton, filter === 'cancelled' && styles.filterButtonActive]}
-                                    onPress={() => setFilter('cancelled')}
-                                >
-                                    <Feather name="x-circle" size={14} color={filter === 'cancelled' ? '#FFFEEA' : '#DC2626'} />
-                                    <ThemedText style={[styles.filterButtonText, filter === 'cancelled' && styles.filterButtonTextActive]}>
-                                        CANCELLED
                                     </ThemedText>
                                 </TouchableOpacity>
                             </ThemedView>
@@ -276,8 +282,8 @@ export default function LogScreen() {
                                     <ThemedText style={styles.emptyText}>No orders found</ThemedText>
                                     <ThemedText style={styles.emptySubtext}>
                                         {filter === 'all'
-                                            ? 'No paid or cancelled orders yet'
-                                            : `No ${filter} orders found`}
+                                            ? 'No paid orders yet'
+                                            : 'No paid orders found'}
                                     </ThemedText>
                                 </ThemedView>
                             ) : (
@@ -437,6 +443,7 @@ export default function LogScreen() {
     );
 }
 
+// Styles remain the same as previous version
 const styles = StyleSheet.create({
     container: {
         flex: 1,

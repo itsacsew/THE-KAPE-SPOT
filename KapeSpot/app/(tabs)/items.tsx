@@ -10,6 +10,19 @@ import { NetworkScanner } from '@/lib/network-scanner';
 import { useFocusEffect } from '@react-navigation/native';
 import React from 'react';
 import { OfflineSyncService } from '@/lib/offline-sync';
+import {
+    getFirestore,
+    collection,
+    getDocs,
+    addDoc,
+    updateDoc,
+    deleteDoc,
+    doc,
+    query,
+    where,
+    orderBy
+} from 'firebase/firestore';
+import { app } from '@/lib/firebase-config';
 
 interface MenuItem {
     id: string;
@@ -23,6 +36,7 @@ interface MenuItem {
     description?: string;
     image?: string;
     isOffline?: boolean;
+    firebaseId?: string;
 }
 
 interface Category {
@@ -32,8 +46,8 @@ interface Category {
     items_count: number;
     created_on: string;
     isOffline?: boolean;
+    firebaseId?: string;
 }
-
 
 interface CupItem {
     id: string;
@@ -42,32 +56,9 @@ interface CupItem {
     size?: string;
     status?: boolean;
     isOffline?: boolean;
+    firebaseId?: string;
 }
 
-interface ApiMenuItem {
-    id: number | string;
-    code: string;
-    name: string;
-    price: string | number;
-    category: string;
-    stocks: string | number;
-    sales: string | number;
-    status: string | number | boolean;
-    description?: string;
-    image?: string | null;
-    created_at?: string;
-    updated_at?: string;
-}
-
-interface ApiCategory {
-    id: number | string;
-    name: string;
-    icon?: string;
-    items_count?: number;
-    created_at?: string;
-    created_on?: string;
-}
-// Add this interface sa items.tsx
 interface PendingItem {
     id: string;
     type: 'CREATE_ITEM' | 'UPDATE_ITEM' | 'DELETE_ITEM' | 'CREATE_CATEGORY' | 'UPDATE_CATEGORY' | 'DELETE_CATEGORY';
@@ -100,67 +91,55 @@ export default function ItemsScreen() {
     const [categoryName, setCategoryName] = useState('');
     const [categoryIcon, setCategoryIcon] = useState('folder');
 
+    // Item Edit Modal states
+    const [editItemModal, setEditItemModal] = useState(false);
+    const [editingItem, setEditingItem] = useState<MenuItem | null>(null);
+    const [editItemStocks, setEditItemStocks] = useState('');
+    const [editItemPrice, setEditItemPrice] = useState('');
+
     const itemsPerPage = 10;
+    const db = getFirestore(app);
 
-    // Function to get dynamic API URL
-    // Function to get dynamic API URL
-    const getApiBaseUrl = async (): Promise<string> => {
+    // Function to get connection mode - IMPROVED VERSION
+    const getConnectionMode = async (): Promise<'online' | 'offline'> => {
         try {
-            const serverIP = await NetworkScanner.findServerIP();
+            console.log('🔍 Checking connection mode...');
+            const mode = await NetworkScanner.getApiBaseUrl();
+            const isOnline = mode === 'online';
+            setIsOnlineMode(isOnline);
 
-            if (serverIP === 'demo' || serverIP === 'local') {
-                console.log('❌ No server found, using local storage only');
-                setIsOnlineMode(false);
-                return 'local';
+            console.log('🌐 Connection Mode:', isOnline ? 'ONLINE' : 'OFFLINE');
+
+            // If online, trigger immediate sync
+            if (isOnline) {
+                console.log('🚀 Online detected - triggering immediate sync...');
+                setTimeout(() => {
+                    const syncService = OfflineSyncService.getInstance();
+                    syncService.trySync().catch(syncError => {
+                        console.log('📡 Immediate sync failed:', syncError);
+                    });
+                }, 1000);
             }
 
-            // Test the connection first with proper timeout
-            const testUrl = `http://${serverIP}/backend/api/test.php`;
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 5000);
-
-            try {
-                const testResponse = await fetch(testUrl, {
-                    method: 'GET',
-                    signal: controller.signal
-                });
-
-                clearTimeout(timeoutId);
-
-                if (!testResponse.ok) {
-                    throw new Error('Server test failed');
-                }
-
-                const baseUrl = `http://${serverIP}/backend/api`;
-                console.log(`🌐 Using server: ${baseUrl}`);
-                setIsOnlineMode(true);
-                return baseUrl;
-            } catch (testError) {
-                clearTimeout(timeoutId);
-                throw testError;
-            }
-
+            return mode;
         } catch (error) {
-            console.log('❌ Error detecting server, using local storage only:', error);
+            console.log('❌ Error checking connection mode:', error);
             setIsOnlineMode(false);
-            return 'local';
+            return 'offline';
         }
     };
-
-
 
     // Available icons for categories
     const availableIcons = ['folder', 'coffee', 'star', 'shopping-bag', 'package', 'heart', 'bookmark', 'tag'];
 
-    // Load menu items from API - SEPARATE LOGIC FOR ONLINE vs OFFLINE
-    // Load menu items from API - SEPARATE LOGIC FOR ONLINE vs OFFLINE
+    // Load menu items from Firebase - SEPARATE LOGIC FOR ONLINE vs OFFLINE
     const loadMenuItems = async () => {
         setLoading(true);
         try {
             const syncService = OfflineSyncService.getInstance();
-            const API_BASE_URL = await getApiBaseUrl();
+            const connectionMode = await getConnectionMode();
 
-            if (API_BASE_URL === 'local') {
+            if (connectionMode === 'offline') {
                 console.log('📱 Loading OFFLINE data (local storage only)...');
                 // OFFLINE MODE: Show ONLY local storage items
                 const offlineItems = await syncService.getItems();
@@ -175,33 +154,35 @@ export default function ItemsScreen() {
                 return;
             }
 
-            console.log('🔗 Fetching from SERVER (ONLINE MODE)...');
-            const response = await fetch(`${API_BASE_URL}/items.php`);
+            console.log('🔥 Fetching from FIREBASE (ONLINE MODE)...');
 
-            if (!response.ok) throw new Error('HTTP error');
+            // ONLINE MODE: Fetch from Firebase Firestore
+            const itemsCollection = collection(db, 'items');
+            const itemsSnapshot = await getDocs(itemsCollection);
 
-            const data: ApiMenuItem[] = await response.json();
-            console.log('📦 Server data received:', data.length, 'items');
+            const firebaseItems: MenuItem[] = itemsSnapshot.docs.map(doc => {
+                const data = doc.data();
+                return {
+                    id: doc.id,
+                    code: data.code || '',
+                    name: data.name || '',
+                    price: data.price || 0,
+                    category: data.category || 'Uncategorized',
+                    stocks: data.stocks || 0,
+                    sales: data.sales || 0,
+                    status: data.status !== false,
+                    description: data.description || '',
+                    image: data.image || undefined,
+                    isOffline: false, // Mark as online
+                    firebaseId: doc.id
+                };
+            });
 
-            // ONLINE MODE: Show ONLY server items (no local storage items)
-            const serverItems: MenuItem[] = data.map((item: ApiMenuItem) => ({
-                id: String(item.id),
-                code: String(item.code),
-                name: String(item.name),
-                price: Number(item.price),
-                category: String(item.category),
-                stocks: Number(item.stocks || 0),
-                sales: Number(item.sales || 0),
-                status: item.status === '1' || item.status === 1 || item.status === true,
-                description: item.description ? String(item.description) : '',
-                image: item.image || undefined,
-                isOffline: false // Mark as online
-            }));
-
-            setMenuItems(serverItems);
-            console.log('✅ Loaded ONLINE items:', serverItems.length, 'server items');
+            setMenuItems(firebaseItems);
+            console.log('✅ Loaded FIREBASE items:', firebaseItems.length, 'items');
 
         } catch (error) {
+            console.error('❌ Error loading menu items:', error);
 
             // Fallback to OFFLINE mode on error
             const syncService = OfflineSyncService.getInstance();
@@ -213,18 +194,17 @@ export default function ItemsScreen() {
         }
     };
 
-    // Load categories from API
-    // Load categories from API - FIXED VERSION
+    // Load categories from Firebase
     const loadCategories = async () => {
         setCategoriesLoading(true);
         try {
             const syncService = OfflineSyncService.getInstance();
-            const API_BASE_URL = await getApiBaseUrl();
+            const connectionMode = await getConnectionMode();
 
             console.log('🔄 [CATEGORY LOAD] Starting categories load process...');
-            console.log('🌐 Current Mode:', API_BASE_URL === 'local' ? 'OFFLINE' : 'ONLINE');
+            console.log('🌐 Current Mode:', connectionMode === 'offline' ? 'OFFLINE' : 'ONLINE');
 
-            if (API_BASE_URL === 'local') {
+            if (connectionMode === 'offline') {
                 console.log('📱 [CATEGORY LOAD] Loading OFFLINE categories (local storage)...');
                 // OFFLINE MODE: Use ONLY local storage categories
                 const offlineCategories = await syncService.getLocalCategories();
@@ -251,32 +231,30 @@ export default function ItemsScreen() {
                 return;
             }
 
-            console.log('🔗 [CATEGORY LOAD] Fetching categories from server (ONLINE MODE)...');
-            const response = await fetch(`${API_BASE_URL}/categories.php`);
+            console.log('🔥 [CATEGORY LOAD] Fetching categories from Firebase (ONLINE MODE)...');
 
-            if (!response.ok) {
-                console.error('❌ [CATEGORY LOAD] Server response not OK:', response.status);
-                throw new Error('HTTP error');
-            }
+            // ONLINE MODE: Fetch from Firebase Firestore
+            const categoriesCollection = collection(db, 'categories');
+            const categoriesSnapshot = await getDocs(categoriesCollection);
 
-            const data: ApiCategory[] = await response.json();
-            console.log('📦 [CATEGORY LOAD] Server categories received:', data.length, 'categories');
+            const firebaseCategories: Category[] = categoriesSnapshot.docs.map(doc => {
+                const data = doc.data();
+                return {
+                    id: doc.id,
+                    name: data.name || '',
+                    icon: data.icon || 'folder',
+                    items_count: data.items_count || 0,
+                    created_on: data.created_on || data.created_at || 'Unknown date',
+                    isOffline: false, // Mark as online
+                    firebaseId: doc.id
+                };
+            });
 
-            // ONLINE MODE: Show ONLY server categories (NO local storage categories)
-            const serverCategories: Category[] = data.map((category: ApiCategory) => ({
-                id: String(category.id),
-                name: String(category.name),
-                icon: category.icon || 'folder',
-                items_count: category.items_count || 0,
-                created_on: category.created_at || category.created_on || 'Unknown date',
-                isOffline: false // Mark as online
-            }));
-
-            setCategories(serverCategories);
-            console.log('✅ [CATEGORY LOAD] Loaded ONLINE categories:', serverCategories.length, 'server categories ONLY');
+            setCategories(firebaseCategories);
+            console.log('✅ [CATEGORY LOAD] Loaded FIREBASE categories:', firebaseCategories.length, 'categories');
 
         } catch (error) {
-
+            console.error('❌ [CATEGORY LOAD] Error loading categories:', error);
 
             // Fallback to local storage categories ONLY
             const syncService = OfflineSyncService.getInstance();
@@ -309,15 +287,14 @@ export default function ItemsScreen() {
         }
     };
 
-    // Load cups data - LOCAL STORAGE ONLY
-    // Load cups data - LOCAL STORAGE ONLY
+    // Load cups data - FIREBASE + LOCAL STORAGE
     const loadCups = async () => {
         setCupsLoading(true);
         try {
             const syncService = OfflineSyncService.getInstance();
-            const API_BASE_URL = await getApiBaseUrl();
+            const connectionMode = await getConnectionMode();
 
-            if (API_BASE_URL === 'local') {
+            if (connectionMode === 'offline') {
                 // OFFLINE MODE: Load from local storage only
                 console.log('📱 Loading cups from local storage (OFFLINE MODE)...');
                 const storedCups = await syncService.getCups();
@@ -339,29 +316,53 @@ export default function ItemsScreen() {
                 return;
             }
 
-            // ONLINE MODE: Load from server
-            console.log('🌐 Loading cups from server (ONLINE MODE)...');
-            const response = await fetch(`${API_BASE_URL}/cups.php`);
+            // ONLINE MODE: Load from Firebase
+            console.log('🔥 Loading cups from Firebase (ONLINE MODE)...');
+            const cupsCollection = collection(db, 'cups');
+            const cupsSnapshot = await getDocs(cupsCollection);
 
-            if (!response.ok) throw new Error('HTTP error');
+            const firebaseCups: CupItem[] = cupsSnapshot.docs.map(doc => {
+                const data = doc.data();
+                return {
+                    id: doc.id,
+                    name: data.name || '',
+                    size: data.size || '',
+                    stocks: data.stocks || 0,
+                    status: data.status !== false,
+                    isOffline: false,
+                    firebaseId: doc.id
+                };
+            });
 
-            const data = await response.json();
-            console.log('📦 Server cups data received:', data.length, 'cups');
+            // If no cups in Firebase, create initial ones
+            if (firebaseCups.length === 0) {
+                console.log('📝 No cups found in Firebase, creating initial cups...');
+                const initialCups: CupItem[] = [
+                    { id: '1', name: 'Small Cup', stocks: 100, size: '8oz' },
+                    { id: '2', name: 'Medium Cup', stocks: 80, size: '12oz' },
+                    { id: '3', name: 'Large Cup', stocks: 60, size: '16oz' },
+                ];
 
-            const serverCups: CupItem[] = data.map((cup: any) => ({
-                id: String(cup.id),
-                name: String(cup.name),
-                size: cup.size || '',
-                stocks: Number(cup.stocks || 0),
-                status: cup.status === '1' || cup.status === 1 || cup.status === true,
-                isOffline: false
-            }));
+                // Save to Firebase
+                for (const cup of initialCups) {
+                    await addDoc(collection(db, 'cups'), {
+                        name: cup.name,
+                        size: cup.size,
+                        stocks: cup.stocks,
+                        status: true,
+                        created_at: new Date().toISOString()
+                    });
+                }
 
-            setCupItems(serverCups);
-            console.log('✅ Loaded ONLINE cups:', serverCups.length, 'server cups');
+                setCupItems(initialCups);
+                console.log('✅ Created initial cups in Firebase');
+            } else {
+                setCupItems(firebaseCups);
+                console.log('✅ Loaded FIREBASE cups:', firebaseCups.length, 'cups');
+            }
 
         } catch (error) {
-
+            console.error('❌ Error loading cups:', error);
 
             // Fallback to local storage
             const syncService = OfflineSyncService.getInstance();
@@ -383,11 +384,12 @@ export default function ItemsScreen() {
             setCupsLoading(false);
         }
     };
+
     useFocusEffect(
         React.useCallback(() => {
             loadMenuItems();
             loadCategories();
-            loadCups(); // Load cups data
+            loadCups();
         }, [])
     );
 
@@ -440,7 +442,110 @@ export default function ItemsScreen() {
         setCategoryIcon('folder');
     };
 
-    // Save category - FIXED VERSION with proper icon handling
+    // Item Edit Functions
+    const openEditItemModal = (item: MenuItem) => {
+        console.log('✏️ [ITEM EDIT] Opening edit modal for:', item.name);
+        setEditingItem(item);
+        setEditItemStocks(item.stocks.toString());
+        setEditItemPrice(item.price.toString());
+        setEditItemModal(true);
+    };
+
+    const closeEditItemModal = () => {
+        setEditItemModal(false);
+        setEditingItem(null);
+        setEditItemStocks('');
+        setEditItemPrice('');
+    };
+
+    // Update item stocks and price - FIREBASE VERSION
+    // Update item stocks and price - FIREBASE VERSION
+    const updateItemStocksAndPrice = async (id: string, newStocks: number, newPrice: number) => {
+        try {
+            const syncService = OfflineSyncService.getInstance();
+            const connectionMode = await getConnectionMode();
+
+            // Find the item to check if it's offline
+            const itemToUpdate = menuItems.find(item => item.id === id);
+            const isOfflineItem = itemToUpdate?.isOffline;
+
+            if (connectionMode === 'offline' || isOfflineItem) {
+                // OFFLINE MODE: Update local storage only
+                console.log('📱 Updating item stocks and price in local storage...');
+
+                // Update local state
+                setMenuItems(prev => prev.map(item =>
+                    item.id === id ? { ...item, stocks: newStocks, price: newPrice } : item
+                ));
+
+                // Update local storage - TEMPORARY WORKAROUND
+                console.log('🔄 Using temporary workaround for local storage update...');
+                const localItems = await syncService.getItems();
+                const updatedItems = localItems.map(item =>
+                    item.id === id ? { ...item, stocks: newStocks, price: newPrice } : item
+                );
+                await syncService.setItem('localItems', JSON.stringify(updatedItems));
+
+                Alert.alert('Success', 'Item updated successfully in local storage');
+                return;
+            }
+
+            // ONLINE MODE: Update Firebase
+            console.log('🔥 Updating item stocks and price on Firebase...');
+
+            if (itemToUpdate?.firebaseId) {
+                const itemDoc = doc(db, 'items', itemToUpdate.firebaseId);
+                await updateDoc(itemDoc, {
+                    stocks: newStocks,
+                    price: newPrice,
+                    updated_at: new Date().toISOString()
+                });
+
+                // Update local state
+                setMenuItems(prev => prev.map(item =>
+                    item.id === id ? { ...item, stocks: newStocks, price: newPrice } : item
+                ));
+
+                // Also update local storage for backup - TEMPORARY WORKAROUND
+                const localItems = await syncService.getItems();
+                const updatedItems = localItems.map(item =>
+                    item.id === id ? { ...item, stocks: newStocks, price: newPrice } : item
+                );
+                await syncService.setItem('localItems', JSON.stringify(updatedItems));
+
+                Alert.alert('Success', 'Item updated successfully on Firebase');
+            } else {
+                Alert.alert('Error', 'Item not found in Firebase');
+            }
+
+        } catch (error) {
+            console.error('❌ Error updating item:', error);
+            Alert.alert('Error', 'Failed to update item');
+        }
+    };
+
+    // Save item changes
+    const saveItemChanges = async () => {
+        if (!editingItem) return;
+
+        const stocksValue = parseInt(editItemStocks);
+        const priceValue = parseFloat(editItemPrice);
+
+        if (isNaN(stocksValue) || stocksValue < 0) {
+            Alert.alert('Error', 'Please enter a valid stock number');
+            return;
+        }
+
+        if (isNaN(priceValue) || priceValue < 0) {
+            Alert.alert('Error', 'Please enter a valid price');
+            return;
+        }
+
+        await updateItemStocksAndPrice(editingItem.id, stocksValue, priceValue);
+        closeEditItemModal();
+    };
+
+    // Save category - FIREBASE VERSION with AUTO SYNC
     const saveCategory = async () => {
         if (!categoryName.trim()) {
             Alert.alert('Error', 'Please enter category name');
@@ -449,26 +554,25 @@ export default function ItemsScreen() {
 
         try {
             const syncService = OfflineSyncService.getInstance();
-            const API_BASE_URL = await getApiBaseUrl();
+            const connectionMode = await getConnectionMode();
 
             // Prepare category data with the selected icon
             const categoryData = {
                 name: categoryName,
-                icon: categoryIcon, // This is the icon selected by user
+                icon: categoryIcon,
                 items_count: 0,
-                created_on: new Date().toLocaleString(),
+                created_on: new Date().toISOString(),
                 ...(editingCategory && { id: editingCategory.id })
             };
 
             console.log('🔄 [CATEGORY SAVE] Starting category save process...');
             console.log('📝 Category Data:', {
                 name: categoryName,
-                icon: categoryIcon, // Selected icon
+                icon: categoryIcon,
                 isEdit: !!editingCategory,
                 editingId: editingCategory?.id
             });
-            console.log('🎯 Selected Icon:', categoryIcon);
-            console.log('🌐 Current Mode:', isOnlineMode ? 'ONLINE' : 'OFFLINE');
+            console.log('🌐 Current Mode:', connectionMode === 'offline' ? 'OFFLINE' : 'ONLINE');
 
             // STEP 1: ALWAYS SAVE TO LOCAL STORAGE FIRST
             console.log('💾 [CATEGORY SAVE] Step 1: Saving to LOCAL storage...');
@@ -481,143 +585,100 @@ export default function ItemsScreen() {
             }
 
             console.log('✅ [CATEGORY SAVE] Step 1 COMPLETE: Saved to LOCAL storage');
-            console.log('📦 Local Storage Result:', {
-                success: localResult.success,
-                id: localResult.id,
-                isOffline: localResult.isOffline,
-                icon: categoryIcon // Confirm icon saved locally
-            });
 
-            // STEP 2: TRY TO SAVE TO SERVER IF ONLINE
-            if (API_BASE_URL !== 'local' && isOnlineMode) {
-                console.log('🌐 [CATEGORY SAVE] Step 2: Attempting to save to SERVER...');
+            // STEP 2: TRY TO SAVE TO FIREBASE IF ONLINE
+            if (connectionMode === 'online') {
+                console.log('🔥 [CATEGORY SAVE] Step 2: Attempting to save to FIREBASE...');
 
                 try {
-                    // FIX: Ensure icon is properly included in server data
-                    const serverData: any = {
+                    const firebaseData = {
                         name: categoryName,
-                        icon: categoryIcon // Make sure icon is included
+                        icon: categoryIcon,
+                        items_count: 0,
+                        created_on: new Date().toISOString(),
+                        updated_at: new Date().toISOString()
                     };
 
-                    // For updates, include the ID
-                    if (editingCategory) {
-                        serverData.id = editingCategory.id;
-                    }
+                    let firebaseId: string;
 
-                    console.log('📤 Sending to Server:', serverData);
-                    console.log('🎯 Icon being sent:', serverData.icon);
-
-                    let url: string;
-                    let method: string;
-
-                    if (editingCategory) {
-                        url = `${API_BASE_URL}/categories.php`;
-                        method = 'PUT';
-                        console.log('📝 [CATEGORY SAVE] Updating existing category on server');
+                    if (editingCategory && editingCategory.firebaseId) {
+                        // Update existing category in Firebase
+                        const categoryDoc = doc(db, 'categories', editingCategory.firebaseId);
+                        await updateDoc(categoryDoc, firebaseData);
+                        firebaseId = editingCategory.firebaseId;
+                        console.log('📝 [CATEGORY SAVE] Updated existing category in Firebase');
                     } else {
-                        url = `${API_BASE_URL}/categories.php`;
-                        method = 'POST';
-                        console.log('➕ [CATEGORY SAVE] Creating new category on server');
+                        // Create new category in Firebase
+                        const docRef = await addDoc(collection(db, 'categories'), firebaseData);
+                        firebaseId = docRef.id;
+                        console.log('➕ [CATEGORY SAVE] Created new category in Firebase');
                     }
 
-                    console.log('🔗 Server Request Details:', {
-                        url: url,
-                        method: method,
-                        data: serverData
-                    });
+                    console.log('✅ [CATEGORY SAVE] Step 2 COMPLETE: Saved to FIREBASE successfully');
 
-                    const response = await fetch(url, {
-                        method: method,
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify(serverData),
-                    });
+                    // STEP 3: UPDATE LOCAL STORAGE WITH FIREBASE INFO
+                    console.log('🔄 [CATEGORY SAVE] Step 3: Updating local record with Firebase info...');
+                    const updateResult = await syncService.saveCategory({
+                        ...categoryData,
+                        id: firebaseId,
+                        firebaseId: firebaseId,
+                        icon: categoryIcon
+                    }, true);
 
-                    console.log('📡 Server Response Status:', response.status);
+                    console.log('✅ [CATEGORY SAVE] Step 3 COMPLETE: Local record updated with Firebase ID');
 
-                    // Check if response is JSON
-                    const contentType = response.headers.get('content-type');
-                    if (!contentType || !contentType.includes('application/json')) {
-                        const textResponse = await response.text();
-                        console.error('❌ [CATEGORY SAVE] Server returned non-JSON response:', textResponse);
-                        throw new Error('Server returned invalid response format');
-                    }
+                    await loadCategories();
+                    Alert.alert(
+                        'Success',
+                        `Category "${categoryName}" with icon "${categoryIcon}" saved successfully to both local and Firebase!`
+                    );
 
-                    const result = await response.json();
-                    console.log('📄 Server Response Data:', result);
+                    console.log('🎉 [CATEGORY SAVE] COMPLETE: Category with icon saved to BOTH LOCAL AND FIREBASE!');
 
-                    if (!response.ok) {
-                        throw new Error(result.message || `HTTP error! status: ${response.status}`);
-                    }
-
-                    if (result.success) {
-                        console.log('✅ [CATEGORY SAVE] Step 2 COMPLETE: Saved to SERVER successfully');
-                        console.log('🎯 Server Save Result:', {
-                            success: result.success,
-                            category_id: result.category_id,
-                            id: result.id,
-                            message: result.message,
-                            icon_sent: categoryIcon
-                        });
-
-                        // STEP 3: UPDATE LOCAL STORAGE WITH SERVER INFO
-                        console.log('🔄 [CATEGORY SAVE] Step 3: Updating local record with server info...');
-
-                        if (result.category_id || result.id) {
-                            const serverId = result.category_id || result.id;
-                            console.log('🆕 Updating local category with server ID:', serverId);
-
-                            const updateResult = await syncService.saveCategory({
-                                ...categoryData,
-                                id: String(serverId),
-                                serverId: String(serverId),
-                                icon: categoryIcon // Keep the same icon
-                            }, true);
-
-                            console.log('✅ [CATEGORY SAVE] Step 3 COMPLETE: Local record updated with server ID');
-                            console.log('📦 Local Update Result:', {
-                                success: updateResult.success,
-                                icon_preserved: categoryIcon
-                            });
-                        }
-
-                        await loadCategories();
-                        Alert.alert(
-                            'Success',
-                            `Category "${categoryName}" with icon "${categoryIcon}" saved successfully to both local and server!`
-                        );
-
-                        console.log('🎉 [CATEGORY SAVE] COMPLETE: Category with icon saved to BOTH LOCAL AND SERVER!');
-
-                    } else {
-                        throw new Error(result.message || 'Server returned success: false');
-                    }
-
-                } catch (serverError) {
-                    console.log('⚠️ [CATEGORY SAVE] Server save failed, but local backup exists');
+                } catch (firebaseError) {
+                    console.log('⚠️ [CATEGORY SAVE] Firebase save failed, but local backup exists');
                     console.log('💾 Local backup has icon:', categoryIcon);
+
+                    // AUTO SYNC: Try to sync immediately
+                    console.log('🚀 [AUTO SYNC] Triggering immediate sync for failed Firebase save...');
+                    setTimeout(() => {
+                        syncService.trySync().catch(syncError => {
+                            console.log('📡 [AUTO SYNC] Sync failed, will retry later:', syncError);
+                        });
+                    }, 1000);
 
                     await loadCategories();
                     Alert.alert(
                         'Saved Locally',
-                        `Category "${categoryName}" with icon "${categoryIcon}" saved to local storage. Server sync will be retried later.`
+                        `Category "${categoryName}" with icon "${categoryIcon}" saved to local storage. Auto-sync triggered for Firebase.`
                     );
                 }
             } else {
                 // OFFLINE MODE - Only local save was successful
                 console.log('📱 [CATEGORY SAVE] Offline mode - Only saved to LOCAL storage');
-                console.log('💾 Local storage has icon:', categoryIcon);
+
+                // AUTO SYNC: Add to pending sync queue
+                console.log('📬 [AUTO SYNC] Adding to pending sync queue...');
+                const pendingItems = await syncService.getPendingItems();
+                console.log('📊 Current pending items:', pendingItems.length);
 
                 await loadCategories();
                 Alert.alert(
                     'Saved Locally',
-                    `Category "${categoryName}" with icon "${categoryIcon}" saved to local storage. Will sync when online.`
+                    `Category "${categoryName}" with icon "${categoryIcon}" saved to local storage. Will auto-sync when online.`
                 );
             }
 
             console.log('🎉 [CATEGORY SAVE] FINAL: Category with icon saved successfully!');
             closeCategoryModal();
+
+            // AUTO SYNC: Trigger immediate sync attempt
+            console.log('🚀 [AUTO SYNC] Triggering immediate sync attempt...');
+            setTimeout(() => {
+                syncService.trySync().catch(syncError => {
+                    console.log('📡 [AUTO SYNC] Immediate sync failed:', syncError);
+                });
+            }, 2000);
 
         } catch (error) {
             console.error('❌ [CATEGORY SAVE] Error saving category with icon:', categoryIcon);
@@ -627,6 +688,8 @@ export default function ItemsScreen() {
             );
         }
     };
+
+    // Delete category - FIREBASE VERSION
     const deleteCategory = async (id: string) => {
         Alert.alert(
             'Delete Category',
@@ -639,7 +702,7 @@ export default function ItemsScreen() {
                     onPress: async () => {
                         try {
                             const syncService = OfflineSyncService.getInstance();
-                            const API_BASE_URL = await getApiBaseUrl();
+                            const connectionMode = await getConnectionMode();
 
                             // Find the category first
                             const categoryToDelete = categories.find(cat => cat.id === id);
@@ -648,10 +711,10 @@ export default function ItemsScreen() {
                                 return;
                             }
 
-                            console.log('🗑️ [DUAL-SAVE DELETE] Starting dual-save delete process for category:', categoryToDelete.name);
+                            console.log('🗑️ [FIREBASE DELETE] Starting delete process for category:', categoryToDelete.name);
 
                             // STEP 1: ALWAYS DELETE FROM LOCAL STORAGE FIRST
-                            console.log('💾 [DUAL-SAVE DELETE] Step 1: Deleting from LOCAL storage...');
+                            console.log('💾 [FIREBASE DELETE] Step 1: Deleting from LOCAL storage...');
                             const localSuccess = await syncService.deleteLocalCategory(id);
 
                             if (!localSuccess) {
@@ -659,15 +722,15 @@ export default function ItemsScreen() {
                                 return;
                             }
 
-                            console.log('✅ [DUAL-SAVE DELETE] Step 1 COMPLETE: Deleted from LOCAL storage');
+                            console.log('✅ [FIREBASE DELETE] Step 1 COMPLETE: Deleted from LOCAL storage');
 
                             // STEP 2: UPDATE LOCAL ITEMS THAT USE THIS CATEGORY
-                            console.log('🔄 [DUAL-SAVE DELETE] Step 2: Updating items with deleted category...');
+                            console.log('🔄 [FIREBASE DELETE] Step 2: Updating items with deleted category...');
                             const localItems = await syncService.getItems();
                             const itemsToUpdate = localItems.filter(item => item.category === categoryToDelete.name);
 
                             if (itemsToUpdate.length > 0) {
-                                console.log(`📝 [DUAL-SAVE DELETE] Updating ${itemsToUpdate.length} items to 'Uncategorized'`);
+                                console.log(`📝 [FIREBASE DELETE] Updating ${itemsToUpdate.length} items to 'Uncategorized'`);
 
                                 const updatedItems = localItems.map(item =>
                                     item.category === categoryToDelete.name
@@ -676,61 +739,48 @@ export default function ItemsScreen() {
                                 );
 
                                 await syncService.setItem('localItems', JSON.stringify(updatedItems));
-                                console.log('✅ [DUAL-SAVE DELETE] Step 2 COMPLETE: Items updated');
+                                console.log('✅ [FIREBASE DELETE] Step 2 COMPLETE: Items updated');
                             }
 
-                            // STEP 3: TRY TO DELETE FROM SERVER IF ONLINE AND IT'S AN ONLINE CATEGORY
-                            if (API_BASE_URL !== 'local' && isOnlineMode && !categoryToDelete.isOffline) {
-                                console.log('🌐 [DUAL-SAVE DELETE] Step 3: Attempting to delete from SERVER...');
+                            // STEP 3: TRY TO DELETE FROM FIREBASE IF ONLINE AND IT'S AN ONLINE CATEGORY
+                            if (connectionMode === 'online' && !categoryToDelete.isOffline && categoryToDelete.firebaseId) {
+                                console.log('🔥 [FIREBASE DELETE] Step 3: Attempting to delete from FIREBASE...');
 
                                 try {
-                                    const response = await fetch(`${API_BASE_URL}/categories.php?id=${id}`, {
-                                        method: 'DELETE',
-                                    });
+                                    const categoryDoc = doc(db, 'categories', categoryToDelete.firebaseId);
+                                    await deleteDoc(categoryDoc);
 
-                                    const result = await response.json();
+                                    console.log('✅ [FIREBASE DELETE] Step 3 COMPLETE: Deleted from FIREBASE successfully');
 
-                                    if (result.success) {
-                                        console.log('✅ [DUAL-SAVE DELETE] Step 3 COMPLETE: Deleted from SERVER successfully');
-
-                                        // STEP 4: ALSO UPDATE ITEMS ON SERVER IF NEEDED
-                                        if (itemsToUpdate.length > 0) {
-                                            console.log('🔄 [DUAL-SAVE DELETE] Step 4: Updating items on server...');
-                                            for (const item of itemsToUpdate) {
-                                                if (!item.isOffline) {
-                                                    try {
-                                                        await fetch(`${API_BASE_URL}/items.php`, {
-                                                            method: 'PUT',
-                                                            headers: {
-                                                                'Content-Type': 'application/json',
-                                                            },
-                                                            body: JSON.stringify({
-                                                                id: item.id,
-                                                                category: 'Uncategorized'
-                                                            }),
-                                                        });
-                                                    } catch (itemError) {
-                                                        console.log('⚠️ Failed to update item on server:', item.name);
-                                                    }
+                                    // STEP 4: ALSO UPDATE ITEMS ON FIREBASE IF NEEDED
+                                    if (itemsToUpdate.length > 0) {
+                                        console.log('🔄 [FIREBASE DELETE] Step 4: Updating items on Firebase...');
+                                        for (const item of itemsToUpdate) {
+                                            if (!item.isOffline && item.firebaseId) {
+                                                try {
+                                                    const itemDoc = doc(db, 'items', item.firebaseId);
+                                                    await updateDoc(itemDoc, {
+                                                        category: 'Uncategorized',
+                                                        updated_at: new Date().toISOString()
+                                                    });
+                                                } catch (itemError) {
+                                                    console.log('⚠️ Failed to update item on Firebase:', item.name);
                                                 }
                                             }
-                                            console.log('✅ [DUAL-SAVE DELETE] Step 4 COMPLETE: Server items updated');
                                         }
-
-                                        Alert.alert('Success', 'Category deleted successfully from both local and server!');
-
-                                    } else {
-                                        throw new Error(result.message || 'Server returned success: false');
+                                        console.log('✅ [FIREBASE DELETE] Step 4 COMPLETE: Firebase items updated');
                                     }
 
-                                } catch (serverError) {
-                                    console.log('⚠️ [DUAL-SAVE DELETE] Server delete failed, but local delete completed:', serverError);
+                                    Alert.alert('Success', 'Category deleted successfully from both local and Firebase!');
 
-                                    // Add to pending items for later server deletion
+                                } catch (firebaseError) {
+                                    console.log('⚠️ [FIREBASE DELETE] Firebase delete failed, but local delete completed:', firebaseError);
+
+                                    // Add to pending items for later Firebase deletion
                                     const pendingDelete: PendingItem = {
                                         id: id,
                                         type: 'DELETE_CATEGORY',
-                                        data: { id: id, name: categoryToDelete.name },
+                                        data: { id: id, name: categoryToDelete.name, firebaseId: categoryToDelete.firebaseId },
                                         timestamp: Date.now(),
                                         retryCount: 0
                                     };
@@ -742,23 +792,23 @@ export default function ItemsScreen() {
 
                                     Alert.alert(
                                         'Deleted Locally',
-                                        'Category deleted from local storage. Server deletion will be retried later.'
+                                        'Category deleted from local storage. Firebase deletion will be retried later.'
                                     );
                                 }
                             } else {
                                 // OFFLINE MODE or OFFLINE CATEGORY - Only local delete was successful
                                 if (categoryToDelete.isOffline) {
-                                    console.log('📱 [DUAL-SAVE DELETE] Offline category - Only deleted from LOCAL storage');
+                                    console.log('📱 [FIREBASE DELETE] Offline category - Only deleted from LOCAL storage');
                                 } else {
-                                    console.log('📡 [DUAL-SAVE DELETE] Offline mode - Only deleted from LOCAL storage');
+                                    console.log('📡 [FIREBASE DELETE] Offline mode - Only deleted from LOCAL storage');
                                 }
 
-                                // Add to pending items for later server deletion (if it was an online category)
-                                if (!categoryToDelete.isOffline) {
+                                // Add to pending items for later Firebase deletion (if it was an online category)
+                                if (!categoryToDelete.isOffline && categoryToDelete.firebaseId) {
                                     const pendingDelete: PendingItem = {
                                         id: id,
                                         type: 'DELETE_CATEGORY',
-                                        data: { id: id, name: categoryToDelete.name },
+                                        data: { id: id, name: categoryToDelete.name, firebaseId: categoryToDelete.firebaseId },
                                         timestamp: Date.now(),
                                         retryCount: 0
                                     };
@@ -777,7 +827,7 @@ export default function ItemsScreen() {
                             }
 
                             // STEP 5: UPDATE UI
-                            console.log('🎨 [DUAL-SAVE DELETE] Step 5: Updating UI...');
+                            console.log('🎨 [FIREBASE DELETE] Step 5: Updating UI...');
                             setCategories(prev => prev.filter(cat => cat.id !== id));
 
                             // Also update menu items in state
@@ -787,10 +837,10 @@ export default function ItemsScreen() {
                                     : item
                             ));
 
-                            console.log('🎉 [DUAL-SAVE DELETE] DUAL-SAVE DELETE PROCESS COMPLETED!');
+                            console.log('🎉 [FIREBASE DELETE] DELETE PROCESS COMPLETED!');
 
                         } catch (error) {
-                            console.error('❌ [DUAL-SAVE DELETE] Error in dual-save delete process:', error);
+                            console.error('❌ [FIREBASE DELETE] Error in delete process:', error);
                             Alert.alert(
                                 'Error',
                                 `Failed to delete category: ${error instanceof Error ? error.message : 'Unknown error'}`
@@ -802,17 +852,17 @@ export default function ItemsScreen() {
         );
     };
 
-    // Update cup stocks - LOCAL STORAGE ONLY
+    // Update cup stocks - FIREBASE VERSION
     const updateCupStocks = async (id: string, newStocks: number) => {
         try {
             const syncService = OfflineSyncService.getInstance();
-            const API_BASE_URL = await getApiBaseUrl();
+            const connectionMode = await getConnectionMode();
 
             // Find the cup to check if it's offline
             const cupToUpdate = cupItems.find(cup => cup.id === id);
             const isOfflineCup = cupToUpdate?.isOffline;
 
-            if (API_BASE_URL === 'demo' || !isOnlineMode || isOfflineCup) {
+            if (connectionMode === 'offline' || isOfflineCup) {
                 // OFFLINE MODE: Update local storage only
                 console.log('📱 Updating cup stocks in local storage...');
 
@@ -831,22 +881,16 @@ export default function ItemsScreen() {
                 return;
             }
 
-            // ONLINE MODE: Update server
-            console.log('🌐 Updating cup stocks on server...');
-            const response = await fetch(`${API_BASE_URL}/cups.php`, {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    id: id,
-                    stocks: newStocks
-                }),
-            });
+            // ONLINE MODE: Update Firebase
+            console.log('🔥 Updating cup stocks on Firebase...');
 
-            const result = await response.json();
+            if (cupToUpdate?.firebaseId) {
+                const cupDoc = doc(db, 'cups', cupToUpdate.firebaseId);
+                await updateDoc(cupDoc, {
+                    stocks: newStocks,
+                    updated_at: new Date().toISOString()
+                });
 
-            if (result.success) {
                 // Update local state
                 setCupItems(prev => prev.map(cup =>
                     cup.id === id ? { ...cup, stocks: newStocks } : cup
@@ -858,9 +902,9 @@ export default function ItemsScreen() {
                 );
                 await syncService.saveCups(updatedCups);
 
-                Alert.alert('Success', 'Cup stocks updated on server');
+                Alert.alert('Success', 'Cup stocks updated on Firebase');
             } else {
-                Alert.alert('Error', 'Failed to update cup stocks on server');
+                Alert.alert('Error', 'Cup not found in Firebase');
             }
 
         } catch (error) {
@@ -897,6 +941,7 @@ export default function ItemsScreen() {
         closeEditStocksModal();
     };
 
+    // Delete item - FIREBASE VERSION
     const deleteItem = async (id: string) => {
         Alert.alert(
             'Delete Item',
@@ -910,7 +955,7 @@ export default function ItemsScreen() {
                         setLoading(true);
                         try {
                             const syncService = OfflineSyncService.getInstance();
-                            const API_BASE_URL = await getApiBaseUrl();
+                            const connectionMode = await getConnectionMode();
 
                             // Find the item first to check if it's offline
                             const itemToDelete = menuItems.find(item => item.id === id);
@@ -925,7 +970,7 @@ export default function ItemsScreen() {
                             console.log('   Local Storage:', localItemsBefore.length);
                             console.log('   Item to delete:', itemToDelete?.name, `(ID: ${id})`);
 
-                            if (API_BASE_URL === 'demo' || !isOnlineMode || isOfflineItem) {
+                            if (connectionMode === 'offline' || isOfflineItem) {
                                 // OFFLINE MODE or OFFLINE ITEM: Remove from local storage
                                 console.log('📱 DELETING FROM LOCAL STORAGE...');
 
@@ -953,14 +998,13 @@ export default function ItemsScreen() {
                                 return;
                             }
 
-                            // ONLINE MODE + ONLINE ITEM: Delete from server
-                            console.log('🌐 DELETING FROM SERVER...');
-                            const response = await fetch(`${API_BASE_URL}/items.php?id=${id}`, {
-                                method: 'DELETE',
-                            });
-                            const result = await response.json();
+                            // ONLINE MODE + ONLINE ITEM: Delete from Firebase
+                            console.log('🔥 DELETING FROM FIREBASE...');
 
-                            if (result.success) {
+                            if (itemToDelete?.firebaseId) {
+                                const itemDoc = doc(db, 'items', itemToDelete.firebaseId);
+                                await deleteDoc(itemDoc);
+
                                 // Remove from local state
                                 setMenuItems(prev => prev.filter(item => item.id !== id));
 
@@ -971,16 +1015,16 @@ export default function ItemsScreen() {
                                 const localItemsAfter = await syncService.getItems();
                                 const totalItemsAfter = menuItems.length - 1;
 
-                                console.log('🎯 DELETION COMPLETE - SERVER:');
+                                console.log('🎯 DELETION COMPLETE - FIREBASE:');
                                 console.log('   UI Items:', totalItemsAfter, `(-1)`);
                                 console.log('   Local Storage:', localItemsAfter.length, `(-${localItemsBefore.length - localItemsAfter.length})`);
 
                                 Alert.alert(
                                     'Success',
-                                    `Item deleted successfully from server\n\nRemaining: ${totalItemsAfter} items in list\nLocal storage: ${localItemsAfter.length} items`
+                                    `Item deleted successfully from Firebase\n\nRemaining: ${totalItemsAfter} items in list\nLocal storage: ${localItemsAfter.length} items`
                                 );
                             } else {
-                                Alert.alert('Error', 'Failed to delete item from server');
+                                Alert.alert('Error', 'Item not found in Firebase');
                             }
                         } catch (error) {
                             console.error('❌ Error deleting item:', error);
@@ -994,10 +1038,11 @@ export default function ItemsScreen() {
         );
     };
 
+    // Toggle item status - FIREBASE VERSION
     const toggleStatus = async (id: string) => {
         try {
-            const API_BASE_URL = await getApiBaseUrl();
-            if (API_BASE_URL === 'demo' || !isOnlineMode) {
+            const connectionMode = await getConnectionMode();
+            if (connectionMode === 'offline') {
                 // OFFLINE MODE: Update local state only
                 setMenuItems(prev => prev.map(item =>
                     item.id === id ? { ...item, status: !item.status } : item
@@ -1005,22 +1050,15 @@ export default function ItemsScreen() {
                 return;
             }
 
-            // ONLINE MODE: Update server
+            // ONLINE MODE: Update Firebase
             const item = menuItems.find(item => item.id === id);
-            const response = await fetch(`${API_BASE_URL}/items.php`, {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    id: id,
-                    status: !item?.status
-                }),
-            });
+            if (item?.firebaseId) {
+                const itemDoc = doc(db, 'items', item.firebaseId);
+                await updateDoc(itemDoc, {
+                    status: !item.status,
+                    updated_at: new Date().toISOString()
+                });
 
-            const result = await response.json();
-
-            if (result.success) {
                 setMenuItems(prev => prev.map(item =>
                     item.id === id ? { ...item, status: !item.status } : item
                 ));
@@ -1231,9 +1269,10 @@ export default function ItemsScreen() {
                                                             color={item.status ? "#16A34A" : "#DC2626"}
                                                         />
                                                     </TouchableOpacity>
+                                                    {/* EDIT BUTTON - Pencil Icon */}
                                                     <TouchableOpacity
                                                         style={styles.editButton}
-                                                        onPress={() => console.log('Edit', item.id)}
+                                                        onPress={() => openEditItemModal(item)}
                                                     >
                                                         <Feather name="edit-2" size={16} color="#874E3B" />
                                                     </TouchableOpacity>
@@ -1351,9 +1390,6 @@ export default function ItemsScreen() {
                                                     {category.created_on}
                                                 </ThemedText>
                                                 <ThemedView style={styles.categoryActionsCell}>
-                                                    {/* ADD THIS CHECK INDICATOR */}
-
-
                                                     <TouchableOpacity
                                                         style={styles.editButton}
                                                         onPress={() => openEditCategoryModal(category)}
@@ -1582,6 +1618,80 @@ export default function ItemsScreen() {
                                 >
                                     <ThemedText style={styles.saveModalButtonText}>
                                         {editingCategory ? 'Update Category' : 'Add Category'}
+                                    </ThemedText>
+                                </TouchableOpacity>
+                            </ThemedView>
+                        </ThemedView>
+                    </ThemedView>
+                </Modal>
+
+                {/* Item Edit Modal */}
+                <Modal
+                    visible={editItemModal}
+                    animationType="slide"
+                    transparent={true}
+                    onRequestClose={closeEditItemModal}
+                >
+                    <ThemedView style={styles.modalOverlay}>
+                        <ThemedView style={styles.modalContainer}>
+                            <ThemedView style={styles.modalHeader}>
+                                <ThemedText style={styles.modalTitle}>
+                                    Edit Item - {editingItem?.name}
+                                </ThemedText>
+                                <TouchableOpacity
+                                    style={styles.closeButton}
+                                    onPress={closeEditItemModal}
+                                >
+                                    <Feather name="x" size={20} color="#874E3B" />
+                                </TouchableOpacity>
+                            </ThemedView>
+
+                            <ThemedView style={styles.modalContent}>
+                                <ThemedView style={styles.inputContainer}>
+                                    <ThemedText style={styles.inputLabel}>
+                                        Current Stocks: {editingItem?.stocks}
+                                    </ThemedText>
+                                    <TextInput
+                                        style={styles.stocksInput}
+                                        value={editItemStocks}
+                                        onChangeText={setEditItemStocks}
+                                        keyboardType="numeric"
+                                        placeholder="Enter new stocks"
+                                        placeholderTextColor="#9CA3AF"
+                                    />
+                                </ThemedView>
+
+                                <ThemedView style={styles.inputContainer}>
+                                    <ThemedText style={styles.inputLabel}>
+                                        Current Price: ₱{editingItem?.price.toFixed(2)}
+                                    </ThemedText>
+                                    <TextInput
+                                        style={styles.stocksInput}
+                                        value={editItemPrice}
+                                        onChangeText={setEditItemPrice}
+                                        keyboardType="numeric"
+                                        placeholder="Enter new price"
+                                        placeholderTextColor="#9CA3AF"
+                                    />
+                                </ThemedView>
+                            </ThemedView>
+
+                            <ThemedView style={styles.modalActions}>
+                                <TouchableOpacity
+                                    style={styles.cancelModalButton}
+                                    onPress={closeEditItemModal}
+                                >
+                                    <ThemedText style={styles.cancelModalButtonText}>
+                                        Cancel
+                                    </ThemedText>
+                                </TouchableOpacity>
+
+                                <TouchableOpacity
+                                    style={styles.saveModalButton}
+                                    onPress={saveItemChanges}
+                                >
+                                    <ThemedText style={styles.saveModalButtonText}>
+                                        Save Changes
                                     </ThemedText>
                                 </TouchableOpacity>
                             </ThemedView>

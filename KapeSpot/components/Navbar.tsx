@@ -16,6 +16,18 @@ import { useRouter, usePathname } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { OfflineSyncService } from '@/lib/offline-sync';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+    getFirestore,
+    collection,
+    query,
+    where,
+    getDocs,
+    doc,
+    updateDoc,
+    getDoc
+} from 'firebase/firestore';
+import { getAuth, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth';
+import { app } from '@/lib/firebase-config';
 import { NetworkScanner } from '@/lib/network-scanner';
 
 interface NavbarProps {
@@ -31,9 +43,9 @@ interface SyncStatus {
 interface User {
     id: string;
     username: string;
-    password: string;
     role: 'user' | 'admin';
     name: string;
+    firebaseUID?: string;
 }
 
 export default function Navbar({ activeNav }: NavbarProps) {
@@ -50,6 +62,12 @@ export default function Navbar({ activeNav }: NavbarProps) {
     const [currentPassword, setCurrentPassword] = useState('');
     const [newPassword, setNewPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
+    const [isFirebaseOnline, setIsFirebaseOnline] = useState<boolean>(false);
+    const [isCheckingConnection, setIsCheckingConnection] = useState<boolean>(true);
+
+    // Initialize Firebase
+    const db = getFirestore(app);
+    const auth = getAuth(app);
 
     // Determine active nav based on current route
     const currentActiveNav = activeNav || (pathname === '/pos' ? 'pos' :
@@ -81,6 +99,81 @@ export default function Navbar({ activeNav }: NavbarProps) {
 
         loadCurrentUser();
     }, []);
+
+    // Check Firebase connection status - IMPROVED VERSION
+    useEffect(() => {
+        let isMounted = true;
+
+        const checkFirebaseConnection = async () => {
+            if (!isMounted) return;
+
+            setIsCheckingConnection(true);
+            try {
+                console.log('🔍 Navbar: Checking Firebase connection...');
+                const connectionMode = await NetworkScanner.getApiBaseUrl();
+                const isOnline = connectionMode === 'online';
+
+                if (isMounted) {
+                    setIsFirebaseOnline(isOnline);
+                    console.log('🔥 Navbar Firebase connection:', isOnline ? 'ONLINE' : 'OFFLINE');
+                }
+            } catch (error) {
+                console.error('❌ Navbar: Error checking Firebase connection:', error);
+                if (isMounted) {
+                    setIsFirebaseOnline(false);
+                }
+            } finally {
+                if (isMounted) {
+                    setIsCheckingConnection(false);
+                }
+            }
+        };
+
+        // Initial check
+        checkFirebaseConnection();
+
+        // Listen for connection changes with improved error handling
+        const connectionListener = (isConnected: boolean, mode: 'online' | 'offline') => {
+            if (!isMounted) return;
+
+            console.log('🔄 Navbar connection status changed:', isConnected ? 'ONLINE' : 'OFFLINE', 'Mode:', mode);
+            setIsFirebaseOnline(isConnected);
+        };
+
+        NetworkScanner.addConnectionListener(connectionListener);
+
+        // Add periodic connection check (every 10 seconds)
+        const intervalId = setInterval(() => {
+            if (isMounted) {
+                checkFirebaseConnection();
+            }
+        }, 10000);
+
+        return () => {
+            isMounted = false;
+            NetworkScanner.removeConnectionListener(connectionListener);
+            clearInterval(intervalId);
+        };
+    }, []);
+
+    // Force refresh connection when component becomes visible - FIXED VERSION
+    useEffect(() => {
+        const handleFocus = () => {
+            console.log('🎯 Navbar focused - refreshing connection status');
+            NetworkScanner.refreshConnection().then(result => {
+                setIsFirebaseOnline(result.isConnected);
+            });
+        };
+
+        // Use useFocusEffect alternative for Expo Router
+        const timeoutId = setTimeout(() => {
+            handleFocus();
+        }, 1000);
+
+        return () => {
+            clearTimeout(timeoutId);
+        };
+    }, [pathname]); // Use pathname as dependency to trigger on route changes
 
     useEffect(() => {
         const syncService = OfflineSyncService.getInstance();
@@ -132,6 +225,9 @@ export default function Navbar({ activeNav }: NavbarProps) {
                     style: 'destructive',
                     onPress: async () => {
                         try {
+                            // Sign out from Firebase Auth
+                            await auth.signOut();
+
                             // Use AsyncStorage directly to remove the currentUser
                             await AsyncStorage.removeItem('currentUser');
                             setCurrentUser(null);
@@ -191,35 +287,32 @@ export default function Navbar({ activeNav }: NavbarProps) {
             }
 
             const user = JSON.parse(userData);
-            const apiBaseUrl = await NetworkScanner.getApiBaseUrl();
+            const currentAuthUser = auth.currentUser;
 
-            if (apiBaseUrl === 'local') {
+            // Check if we're online with Firebase
+            if (!currentAuthUser) {
                 // Offline mode - save to local storage only
                 Alert.alert(
                     'Offline Mode',
-                    'Cannot change password while offline. Please connect to the server to change your password.',
+                    'Cannot change password while offline. Please connect to the internet to change your password.',
                     [{ text: 'OK' }]
                 );
                 return;
             }
 
-            // Online mode - send to server
-            const response = await fetch(`${apiBaseUrl}/users.php`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    action: 'change_password',
-                    user_id: user.id,
-                    current_password: currentPassword,
-                    new_password: newPassword
-                }),
-            });
+            // Online mode - update password in Firebase Auth
+            try {
+                // Re-authenticate user first
+                const credential = EmailAuthProvider.credential(
+                    currentAuthUser.email || `${user.username}@kapespot.com`,
+                    currentPassword
+                );
 
-            const result = await response.json();
+                await reauthenticateWithCredential(currentAuthUser, credential);
 
-            if (result.success) {
+                // Update password
+                await updatePassword(currentAuthUser, newPassword);
+
                 Alert.alert('Success', 'Password changed successfully');
                 setShowChangePassword(false);
 
@@ -228,12 +321,20 @@ export default function Navbar({ activeNav }: NavbarProps) {
                 setNewPassword('');
                 setConfirmPassword('');
 
-                // Update local user data if needed
-                const updatedUser = { ...user, password: newPassword };
-                await syncService.setItem('currentUser', JSON.stringify(updatedUser));
-            } else {
-                Alert.alert('Error', result.message || 'Failed to change password');
+                console.log('✅ Password updated successfully in Firebase Auth');
+
+            } catch (firebaseError: any) {
+                console.error('Firebase password change error:', firebaseError);
+
+                if (firebaseError.code === 'auth/wrong-password') {
+                    Alert.alert('Error', 'Current password is incorrect');
+                } else if (firebaseError.code === 'auth/requires-recent-login') {
+                    Alert.alert('Error', 'Please log in again to change your password');
+                } else {
+                    Alert.alert('Error', 'Failed to change password. Please try again.');
+                }
             }
+
         } catch (error) {
             console.error('Password change error:', error);
             Alert.alert('Error', 'Failed to change password. Please try again.');
@@ -250,6 +351,26 @@ export default function Navbar({ activeNav }: NavbarProps) {
     // Close menu when clicking outside - using Modal's onRequestClose
     const handleCloseMenu = () => {
         setShowAccountMenu(false);
+    };
+
+    // Check Firebase connectivity
+    const checkFirebaseOnline = () => {
+        return isFirebaseOnline;
+    };
+
+    // Manual connection refresh
+    const handleRefreshConnection = async () => {
+        console.log('🔄 Manually refreshing connection...');
+        setIsCheckingConnection(true);
+        try {
+            const result = await NetworkScanner.refreshConnection();
+            setIsFirebaseOnline(result.isConnected);
+            console.log('✅ Manual connection refresh:', result.isConnected ? 'ONLINE' : 'OFFLINE');
+        } catch (error) {
+            console.error('❌ Manual connection refresh failed:', error);
+        } finally {
+            setIsCheckingConnection(false);
+        }
     };
 
     return (
@@ -360,7 +481,6 @@ export default function Navbar({ activeNav }: NavbarProps) {
                     {currentActiveNav === 'order-status' && <ThemedView style={styles.activeIndicator} />}
                 </TouchableOpacity>
 
-
                 {/* Sync Indicator */}
                 <TouchableOpacity
                     style={styles.syncIndicator}
@@ -380,6 +500,26 @@ export default function Navbar({ activeNav }: NavbarProps) {
                     )}
                 </TouchableOpacity>
 
+                {/* Firebase Online Indicator */}
+                <TouchableOpacity
+                    style={styles.firebaseIndicator}
+                    onPress={handleRefreshConnection}
+                    disabled={isCheckingConnection}
+                >
+                    {isCheckingConnection ? (
+                        <Feather
+                            name="refresh-cw"
+                            size={16}
+                            color="#FFA500"
+                        />
+                    ) : (
+                        <Feather
+                            name={checkFirebaseOnline() ? "wifi" : "wifi-off"}
+                            size={16}
+                            color={checkFirebaseOnline() ? '#16A34A' : '#DC2626'}
+                        />
+                    )}
+                </TouchableOpacity>
 
                 {/* Account Circle with Dropdown Menu */}
                 <View style={styles.accountContainer}>
@@ -424,14 +564,19 @@ export default function Navbar({ activeNav }: NavbarProps) {
                                                 <ThemedText style={styles.userUsername}>
                                                     @{currentUser?.username || 'username'}
                                                 </ThemedText>
+                                                <ThemedText style={[
+                                                    styles.connectionStatus,
+                                                    { color: checkFirebaseOnline() ? '#16A34A' : '#DC2626' }
+                                                ]}>
+                                                    {isCheckingConnection ? '🟡 Checking...' :
+                                                        checkFirebaseOnline() ? '🟢 Firebase Online' : '🔴 Firebase Offline'}
+                                                </ThemedText>
                                             </ThemedView>
                                         </ThemedView>
 
                                         <ThemedView style={styles.menuSeparator} />
 
                                         {/* Menu Options */}
-
-
                                         <TouchableOpacity
                                             style={styles.menuItem}
                                             onPress={handleChangePassword}
@@ -439,8 +584,6 @@ export default function Navbar({ activeNav }: NavbarProps) {
                                             <Feather name="lock" size={16} color="#874E3B" />
                                             <ThemedText style={styles.menuItemText}>Change Password</ThemedText>
                                         </TouchableOpacity>
-
-
 
                                         <ThemedView style={styles.menuSeparator} />
 
@@ -472,6 +615,25 @@ export default function Navbar({ activeNav }: NavbarProps) {
                         <TouchableWithoutFeedback>
                             <ThemedView style={styles.changePasswordModal}>
                                 <ThemedText style={styles.changePasswordTitle}>Change Password</ThemedText>
+
+                                <ThemedView style={styles.connectionInfo}>
+                                    {isCheckingConnection ? (
+                                        <Feather name="refresh-cw" size={16} color="#FFA500" />
+                                    ) : (
+                                        <Feather
+                                            name={checkFirebaseOnline() ? "wifi" : "wifi-off"}
+                                            size={16}
+                                            color={checkFirebaseOnline() ? '#16A34A' : '#DC2626'}
+                                        />
+                                    )}
+                                    <ThemedText style={styles.connectionInfoText}>
+                                        {isCheckingConnection ? '🟡 Checking connection...' :
+                                            checkFirebaseOnline()
+                                                ? '🔥 Connected to Firebase - Password will be updated online'
+                                                : '📱 Offline Mode - Password changes require internet connection'
+                                        }
+                                    </ThemedText>
+                                </ThemedView>
 
                                 <ThemedView style={styles.passwordForm}>
                                     <ThemedView style={styles.inputContainer}>
@@ -522,8 +684,15 @@ export default function Navbar({ activeNav }: NavbarProps) {
                                     <TouchableOpacity
                                         style={[styles.passwordButton, styles.saveButton]}
                                         onPress={handleSavePassword}
+                                        disabled={!checkFirebaseOnline() || isCheckingConnection}
                                     >
-                                        <ThemedText style={styles.saveButtonText}>Save Changes</ThemedText>
+                                        <ThemedText style={[
+                                            styles.saveButtonText,
+                                            (!checkFirebaseOnline() || isCheckingConnection) && styles.saveButtonTextDisabled
+                                        ]}>
+                                            {isCheckingConnection ? 'Checking...' :
+                                                checkFirebaseOnline() ? 'Save Changes' : 'Offline'}
+                                        </ThemedText>
                                     </TouchableOpacity>
                                 </ThemedView>
                             </ThemedView>
@@ -535,6 +704,7 @@ export default function Navbar({ activeNav }: NavbarProps) {
     );
 }
 
+// Styles remain the same...
 const styles = StyleSheet.create({
     navbar: {
         marginTop: 20,
@@ -692,6 +862,11 @@ const styles = StyleSheet.create({
         color: '#5A3921',
         opacity: 0.8,
     },
+    connectionStatus: {
+        fontSize: 10,
+        marginTop: 4,
+        fontWeight: '500',
+    },
     menuSeparator: {
         height: 1,
         backgroundColor: '#E8D8C8',
@@ -741,6 +916,16 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
     },
+    firebaseIndicator: {
+        padding: 8,
+        marginLeft: 5,
+        backgroundColor: 'rgba(255, 255, 255, 0.1)',
+        borderRadius: 20,
+        width: 36,
+        height: 36,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
     pendingBadge: {
         position: 'absolute',
         top: 2,
@@ -778,8 +963,22 @@ const styles = StyleSheet.create({
         fontWeight: 'bold',
         color: '#874E3B',
         textAlign: 'center',
-        marginBottom: 20,
+        marginBottom: 16,
         fontFamily: 'LobsterTwoRegular',
+    },
+    connectionInfo: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#F5E6D3',
+        padding: 12,
+        borderRadius: 8,
+        marginBottom: 16,
+    },
+    connectionInfoText: {
+        fontSize: 12,
+        color: '#5A3921',
+        marginLeft: 8,
+        flex: 1,
     },
     passwordForm: {
         marginBottom: 24,
@@ -828,5 +1027,8 @@ const styles = StyleSheet.create({
     saveButtonText: {
         color: '#FFFEEA',
         fontWeight: '600',
+    },
+    saveButtonTextDisabled: {
+        color: '#A8A29E',
     },
 });

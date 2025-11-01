@@ -19,16 +19,65 @@ import { router } from 'expo-router';
 import { NetworkScanner } from '@/lib/network-scanner';
 import { OfflineSyncService } from '@/lib/offline-sync';
 import * as NavigationBar from 'expo-navigation-bar';
+import {
+    getFirestore,
+    collection,
+    addDoc,
+    getDocs,
+    doc,
+    updateDoc
+} from 'firebase/firestore';
+import { app } from '@/lib/firebase-config';
 
 interface Category {
     id: string;
     name: string;
+    firebaseId?: string;
 }
+
+// Function to convert image to base64
+const convertImageToBase64 = async (uri: string): Promise<string | null> => {
+    try {
+        console.log('🔄 Converting image to base64...');
+
+        const response = await fetch(uri);
+        const blob = await response.blob();
+
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                const base64 = reader.result as string;
+                console.log('✅ Image converted to base64, length:', base64.length);
+                resolve(base64);
+            };
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+        });
+    } catch (error) {
+        console.error('❌ Error converting image to base64:', error);
+        return null;
+    }
+};
+
+// Function to validate image file
+const validateImage = (uri: string): boolean => {
+    const validExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
+    const uriLower = uri.toLowerCase();
+
+    const isValidExtension = validExtensions.some(ext => uriLower.endsWith(ext));
+    if (!isValidExtension) {
+        console.log('❌ Invalid image format:', uri);
+        return false;
+    }
+
+    console.log('✅ Valid image format:', uri);
+    return true;
+};
 
 export default function AddItemScreen() {
     const [loading, setLoading] = useState(false);
     const [categories, setCategories] = useState<Category[]>([]);
-    const [apiBaseUrl, setApiBaseUrl] = useState<string>('demo');
+    const [isOnlineMode, setIsOnlineMode] = useState<boolean>(false);
 
     // New item form state
     const [newItem, setNewItem] = useState({
@@ -41,6 +90,10 @@ export default function AddItemScreen() {
     });
 
     const [imageUri, setImageUri] = useState<string | null>(null);
+    const [imageBase64, setImageBase64] = useState<string | null>(null);
+
+    // Initialize Firebase services
+    const db = getFirestore(app);
 
     // Function to hide ALL navigation bars (status bar + navigation bar)
     const hideAllBars = async () => {
@@ -88,54 +141,63 @@ export default function AddItemScreen() {
         };
     }, []);
 
-    // Function to get dynamic API URL
-    const getApiBaseUrl = async (): Promise<string> => {
+    // Function to get connection mode
+    const getConnectionMode = async (): Promise<'online' | 'offline'> => {
         try {
-            const serverIP = await NetworkScanner.findServerIP();
-            if (serverIP === 'demo') {
-                console.log('🔄 Running in demo mode');
-                return 'demo';
-            }
-            const baseUrl = `http://${serverIP}/backend/api`;
-            console.log(`🌐 Using server: ${baseUrl}`);
-            return baseUrl;
+            const mode = await NetworkScanner.getApiBaseUrl();
+            const isOnline = mode === 'online';
+            setIsOnlineMode(isOnline);
+            return mode;
         } catch (error) {
-            console.log('❌ Error detecting server, using demo mode');
-            return 'demo';
+            console.log('❌ Error checking connection mode:', error);
+            setIsOnlineMode(false);
+            return 'offline';
         }
     };
 
-    // Load categories from API
+    // Load categories from Firebase
     const loadCategories = async () => {
         try {
-            const API_BASE_URL = await getApiBaseUrl();
-            setApiBaseUrl(API_BASE_URL);
+            const connectionMode = await getConnectionMode();
 
-            if (API_BASE_URL === 'demo') {
-                console.log('📱 Using demo categories');
-                // Set demo categories
-                setCategories([
-                    { id: '1', name: 'Fast Food' },
-                    { id: '2', name: 'Pizza' },
-                    { id: '3', name: 'Pasta' },
-                    { id: '4', name: 'Sandwich' },
-                    { id: '5', name: 'Beverages' },
-                    { id: '6', name: 'Dessert' },
-                    { id: '7', name: 'Main Course' },
-                ]);
+            if (connectionMode === 'offline') {
+                console.log('📱 Using offline categories');
+                // Set demo categories from local storage
+                const syncService = OfflineSyncService.getInstance();
+                const localCategories = await syncService.getLocalCategories();
+
+                if (localCategories.length > 0) {
+                    setCategories(localCategories);
+                } else {
+                    // Fallback demo categories
+                    setCategories([
+                        { id: '1', name: 'Fast Food' },
+                        { id: '2', name: 'Pizza' },
+                        { id: '3', name: 'Pasta' },
+                        { id: '4', name: 'Sandwich' },
+                        { id: '5', name: 'Beverages' },
+                        { id: '6', name: 'Dessert' },
+                        { id: '7', name: 'Main Course' },
+                    ]);
+                }
                 return;
             }
 
-            console.log('🔗 Fetching categories from server...');
-            const response = await fetch(`${API_BASE_URL}/categories.php`);
+            console.log('🔥 Fetching categories from Firebase...');
+            const categoriesCollection = collection(db, 'categories');
+            const categoriesSnapshot = await getDocs(categoriesCollection);
 
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
+            const firebaseCategories: Category[] = categoriesSnapshot.docs.map(doc => {
+                const data = doc.data();
+                return {
+                    id: doc.id,
+                    name: data.name || '',
+                    firebaseId: doc.id
+                };
+            });
 
-            const data = await response.json();
-            console.log('📦 Categories loaded:', data);
-            setCategories(data);
+            console.log('📦 Categories loaded from Firebase:', firebaseCategories.length);
+            setCategories(firebaseCategories);
 
         } catch (error) {
             console.error('❌ Error loading categories:', error);
@@ -174,6 +236,48 @@ export default function AddItemScreen() {
         }
     };
 
+    // Process and validate selected image
+    const processSelectedImage = async (uri: string) => {
+        try {
+            console.log('🔄 Processing selected image...');
+
+            // Validate image format
+            if (!validateImage(uri)) {
+                Alert.alert(
+                    'Invalid Image Format',
+                    'Please select a valid image file (JPG, JPEG, PNG, GIF, or WEBP).'
+                );
+                return false;
+            }
+
+            // Convert to base64
+            const base64 = await convertImageToBase64(uri);
+            if (!base64) {
+                Alert.alert('Error', 'Failed to process image. Please try another image.');
+                return false;
+            }
+
+            // Check if base64 string is too large (Firestore has 1MB limit per document)
+            if (base64.length > 900000) { // ~900KB limit for safety
+                Alert.alert(
+                    'Image Too Large',
+                    'The selected image is too large. Please choose a smaller image (under 900KB).'
+                );
+                return false;
+            }
+
+            setImageUri(uri);
+            setImageBase64(base64);
+            console.log('✅ Image processed successfully, base64 length:', base64.length);
+            return true;
+
+        } catch (error) {
+            console.error('❌ Error processing image:', error);
+            Alert.alert('Error', 'Failed to process image. Please try again.');
+            return false;
+        }
+    };
+
     // Open camera to capture an image
     const handleCapture = async () => {
         try {
@@ -186,7 +290,8 @@ export default function AddItemScreen() {
                 mediaTypes: ImagePicker.MediaTypeOptions.Images,
                 allowsEditing: true,
                 aspect: [4, 3],
-                quality: 0.7
+                quality: 0.6, // Reduced quality to keep file size smaller
+                base64: false // We'll convert manually to control quality
             });
 
             console.log('📷 Camera result:', result);
@@ -207,7 +312,13 @@ export default function AddItemScreen() {
             if (result && !result.canceled && result.assets && result.assets.length > 0) {
                 const selectedImage = result.assets[0];
                 console.log('✅ Image captured:', selectedImage.uri);
-                setImageUri(selectedImage.uri);
+
+                // Process the image
+                const success = await processSelectedImage(selectedImage.uri);
+                if (!success) {
+                    setImageUri(null);
+                    setImageBase64(null);
+                }
             } else if (result && result.canceled) {
                 console.log('❌ Camera cancelled by user');
             } else {
@@ -234,7 +345,8 @@ export default function AddItemScreen() {
                 mediaTypes: ImagePicker.MediaTypeOptions.Images,
                 allowsEditing: true,
                 aspect: [4, 3],
-                quality: 0.7
+                quality: 0.6, // Reduced quality to keep file size smaller
+                base64: false // We'll convert manually to control quality
             });
 
             console.log('📚 Image library result:', result);
@@ -255,7 +367,13 @@ export default function AddItemScreen() {
             if (result && !result.canceled && result.assets && result.assets.length > 0) {
                 const selectedImage = result.assets[0];
                 console.log('✅ Image selected:', selectedImage.uri);
-                setImageUri(selectedImage.uri);
+
+                // Process the image
+                const success = await processSelectedImage(selectedImage.uri);
+                if (!success) {
+                    setImageUri(null);
+                    setImageBase64(null);
+                }
             } else if (result && result.canceled) {
                 console.log('❌ Image selection cancelled by user');
             } else {
@@ -270,80 +388,7 @@ export default function AddItemScreen() {
         }
     };
 
-    // Function to upload image to server and update database
-    // FIXED: uploadImage function
-    const uploadImage = async (itemId: string): Promise<boolean> => {
-        if (!imageUri) return false;
-
-        try {
-            console.log('📤 Starting image upload...');
-
-            // Check if we have valid API base URL
-            if (apiBaseUrl === 'demo' || !apiBaseUrl) {
-                console.log('📱 Demo mode - skipping image upload');
-                return false;
-            }
-
-            const formData = new FormData();
-
-            // Extract filename from URI
-            const filename = imageUri.split('/').pop() || `item_${itemId}.jpg`;
-            const match = /\.(\w+)$/.exec(filename);
-            const type = match ? `image/${match[1]}` : 'image/jpeg';
-
-            console.log('📄 Preparing image data:', {
-                uri: imageUri,
-                filename,
-                type,
-                itemId
-            });
-
-            // Create proper FormData entry
-            formData.append('image', {
-                uri: imageUri,
-                name: filename,
-                type: type,
-            } as any);
-
-            formData.append('item_id', itemId);
-
-            console.log('🔄 Uploading image to server...');
-            console.log('🌐 Upload URL:', `${apiBaseUrl}/upload-image.php`);
-
-            // Use upload-image.php instead of items.php for image upload
-            const response = await fetch(`${apiBaseUrl}/upload-image.php`, {
-                method: 'POST',
-                body: formData,
-                headers: {
-                    'Content-Type': 'multipart/form-data',
-                },
-            });
-
-            console.log('📡 Upload response status:', response.status);
-
-            if (!response.ok) {
-                console.error('❌ Upload failed with status:', response.status);
-                return false;
-            }
-
-            const responseText = await response.text();
-            console.log('📄 Upload response text:', responseText);
-
-            try {
-                const result = JSON.parse(responseText);
-                console.log('📄 Upload response JSON:', result);
-                return result.success === true || result.success === 'true';
-            } catch (parseError) {
-                console.error('❌ Failed to parse JSON response:', parseError);
-                console.log('📄 Raw response:', responseText);
-                return false;
-            }
-        } catch (error) {
-            console.error('❌ Error uploading image:', error);
-            return false;
-        }
-    };
-
+    // Save item to Firebase Firestore with image as base64
     const handleSaveItem = async () => {
         hideAllBars(); // Ensure ALL bars are hidden when saving
 
@@ -361,9 +406,9 @@ export default function AddItemScreen() {
         setLoading(true);
         try {
             const syncService = OfflineSyncService.getInstance();
-            const API_BASE_URL = await getApiBaseUrl();
+            const connectionMode = await getConnectionMode();
 
-            const itemData = {
+            const itemData: any = {
                 name: newItem.name,
                 code: newItem.code,
                 price: parseFloat(newItem.price),
@@ -372,84 +417,81 @@ export default function AddItemScreen() {
                 description: newItem.description,
                 status: true,
                 sales: 0,
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
             };
 
+            // Add image base64 if exists
+            if (imageBase64) {
+                itemData.image_base64 = imageBase64;
+                itemData.has_image = true;
+                console.log('🖼️ Adding base64 image to item data, length:', imageBase64.length);
+            }
+
             console.log('🚀 Starting item save process...');
+            console.log('🌐 Current Mode:', connectionMode === 'offline' ? 'OFFLINE' : 'ONLINE');
 
-            // ALWAYS SAVE TO LOCAL STORAGE FIRST
-            const localResult = await syncService.saveItem(itemData, API_BASE_URL !== 'demo');
+            // STEP 1: ALWAYS SAVE TO LOCAL STORAGE FIRST
+            console.log('💾 Step 1: Saving to LOCAL storage...');
+            const localResult = await syncService.saveItem(itemData, connectionMode === 'offline');
 
-            if (localResult.success) {
-                console.log('✅ Item successfully saved to local storage:', {
-                    id: localResult.id,
-                    name: itemData.name,
-                    isOffline: localResult.isOffline
-                });
+            if (!localResult.success) {
+                console.error('❌ Failed to save item to local storage');
+                Alert.alert('Error', 'Failed to save item to local storage. Please try again.');
+                return;
+            }
 
-                // If online, also try to save to server
-                if (API_BASE_URL !== 'demo') {
-                    console.log('🌐 Attempting to save to server...');
-                    try {
-                        const serverResponse = await fetch(`${API_BASE_URL}/items.php`, {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                            },
-                            body: JSON.stringify(itemData),
-                        });
+            console.log('✅ Step 1 COMPLETE: Saved to LOCAL storage:', {
+                id: localResult.id,
+                name: itemData.name,
+                isOffline: localResult.isOffline
+            });
 
-                        const serverResult = await serverResponse.json();
+            // STEP 2: TRY TO SAVE TO FIREBASE IF ONLINE
+            if (connectionMode === 'online') {
+                console.log('🔥 Step 2: Attempting to save to FIREBASE...');
 
-                        if (serverResult.success) {
-                            console.log('🎯 Item saved to server successfully:', serverResult);
+                try {
+                    // Save item to Firebase Firestore
+                    const docRef = await addDoc(collection(db, 'items'), itemData);
+                    const firebaseId = docRef.id;
 
-                            // Update local storage with server ID
-                            await syncService.saveItem({
-                                ...itemData,
-                                id: serverResult.item_id || serverResult.id
-                            }, true);
+                    console.log('✅ Step 2 COMPLETE: Saved to FIREBASE successfully:', {
+                        firebaseId: firebaseId,
+                        name: itemData.name,
+                        hasImage: !!imageBase64
+                    });
 
-                            // FIXED: Upload image with proper error handling
-                            if (imageUri) {
-                                console.log('🖼️ Starting image upload...');
-                                const imageUploaded = await uploadImage(serverResult.item_id || serverResult.id);
+                    // STEP 3: UPDATE LOCAL STORAGE WITH FIREBASE INFO
+                    console.log('🔄 Step 3: Updating local record with Firebase info...');
+                    const updatedItemData = {
+                        ...itemData,
+                        id: firebaseId,
+                        firebaseId: firebaseId
+                    };
 
-                                if (imageUploaded) {
-                                    console.log('✅ Image uploaded successfully');
-                                } else {
-                                    console.log('⚠️ Image upload failed, but item was saved');
-                                    // Don't show error alert for image upload failure
-                                }
+                    await syncService.saveItem(updatedItemData, false);
+
+                    console.log('✅ Step 3 COMPLETE: Local record updated with Firebase ID');
+
+                    // SUCCESS - Item saved to both local and Firebase
+                    Alert.alert('Success', 'Item saved to Firebase and local backup!', [
+                        {
+                            text: 'OK',
+                            onPress: () => {
+                                router.back();
+                                router.replace('/items');
                             }
-
-                            Alert.alert('Success', 'Item saved to server and local backup', [
-                                {
-                                    text: 'OK',
-                                    onPress: () => {
-                                        router.back();
-                                        router.replace('/items');
-                                    }
-                                }
-                            ]);
-                        } else {
-                            // Handle server save failure...
                         }
-                    } catch (serverError) {
-                        console.error('❌ Server save error:', serverError);
-                        Alert.alert('Saved Locally', 'Item saved to local storage due to connection issues', [
-                            {
-                                text: 'OK',
-                                onPress: () => {
-                                    router.back();
-                                    router.replace('/items');
-                                }
-                            }
-                        ]);
-                    }
-                } else {
-                    // Demo mode
-                    console.log('🎮 Demo mode - item saved locally only');
-                    Alert.alert('Success (Demo)', 'Item saved to local storage', [
+                    ]);
+
+                    console.log('🎉 ITEM SAVE PROCESS COMPLETED: Saved to BOTH LOCAL AND FIREBASE!');
+
+                } catch (firebaseError) {
+                    console.error('❌ Firebase save error:', firebaseError);
+
+                    // Firebase save failed, but local save was successful
+                    Alert.alert('Saved Locally', 'Item saved to local storage. Firebase sync will be retried later.', [
                         {
                             text: 'OK',
                             onPress: () => {
@@ -460,8 +502,18 @@ export default function AddItemScreen() {
                     ]);
                 }
             } else {
-                console.error('❌ Failed to save item locally');
-                Alert.alert('Error', 'Failed to save item. Please try again.');
+                // OFFLINE MODE - Only local save was successful
+                console.log('📱 Step 2: Offline mode - Only saved to LOCAL storage');
+
+                Alert.alert('Success (Offline)', 'Item saved to local storage. Will sync when online.', [
+                    {
+                        text: 'OK',
+                        onPress: () => {
+                            router.back();
+                            router.replace('/items');
+                        }
+                    }
+                ]);
             }
 
         } catch (error) {
@@ -483,29 +535,9 @@ export default function AddItemScreen() {
             description: ''
         });
         setImageUri(null);
+        setImageBase64(null);
         router.back();
         router.replace('/items');
-    };
-    // FIXED: checkServerConnection with AbortController
-    const checkServerConnection = async (): Promise<boolean> => {
-        try {
-            const API_BASE_URL = await getApiBaseUrl();
-            if (API_BASE_URL === 'demo') return false;
-
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 seconds timeout
-
-            const response = await fetch(`${API_BASE_URL}/test.php`, {
-                method: 'GET',
-                signal: controller.signal
-            });
-
-            clearTimeout(timeoutId);
-            return response.ok;
-        } catch (error) {
-            console.log('❌ Server connection check failed:', error);
-            return false;
-        }
     };
 
     return (
@@ -666,7 +698,7 @@ export default function AddItemScreen() {
 
                                     {imageUri && (
                                         <ThemedText style={styles.imageSelectedText}>
-                                            ✓ Image selected
+                                            ✓ Image selected (Base64)
                                         </ThemedText>
                                     )}
                                 </ThemedView>
@@ -678,7 +710,6 @@ export default function AddItemScreen() {
         </ThemedView>
     );
 }
-
 const styles = StyleSheet.create({
     container: {
         flex: 1,

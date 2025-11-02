@@ -7,7 +7,8 @@ import {
     TouchableOpacity,
     ImageBackground,
     Alert,
-    Image
+    Image,
+    Animated
 } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -43,6 +44,8 @@ interface MenuItem {
     firebaseId?: string;
     image_base64?: string;
     sales?: number;
+    cupName?: string; // ADD THIS LINE
+
 }
 
 interface Category {
@@ -63,6 +66,29 @@ interface ReceiptData {
     timestamp: string;
     status: 'unpaid' | 'paid' | 'cancelled';
     firebaseId?: string;
+    cupsUsed?: number; // ADD THIS LINE
+}
+// Add these interfaces to pos.tsx
+interface CupItem {
+    id: string;
+    name: string;
+    stocks: number;
+    size?: string;
+    status?: boolean;
+    isOffline?: boolean;
+    firebaseId?: string;
+    syncStatus?: string;
+    lastUpdated?: number;
+    lastSynced?: number;
+}
+
+interface PendingItem {
+    id: string;
+    type: 'CREATE_ITEM' | 'UPDATE_ITEM' | 'DELETE_ITEM' | 'CREATE_CATEGORY' | 'UPDATE_CATEGORY' | 'DELETE_CATEGORY' | 'CREATE_CUP' | 'UPDATE_CUP' | 'DELETE_CUP' | 'CREATE_ORDER' | 'UPDATE_ORDER';
+    data: any;
+    timestamp: number;
+    retryCount: number;
+    serverId?: string;
 }
 
 export default function PosScreen() {
@@ -76,9 +102,35 @@ export default function PosScreen() {
     const [customerName, setCustomerName] = useState('');
     const [showReceiptModal, setShowReceiptModal] = useState(false);
     const [currentReceipt, setCurrentReceipt] = useState<ReceiptData | null>(null);
+    const [isProcessingOrder, setIsProcessingOrder] = useState(false);
+    const [spinAnim] = useState(new Animated.Value(0));
+    const [cupCount, setCupCount] = useState(0);
+    const [selectedCupItem, setSelectedCupItem] = useState<MenuItem | null>(null);
+
+
 
     // Initialize Firebase
     const db = getFirestore(app);
+
+    // Spinning animation effect
+    useEffect(() => {
+        if (isProcessingOrder) {
+            Animated.loop(
+                Animated.timing(spinAnim, {
+                    toValue: 1,
+                    duration: 1000,
+                    useNativeDriver: true,
+                })
+            ).start();
+        } else {
+            spinAnim.setValue(0);
+        }
+    }, [isProcessingOrder]);
+
+    const spin = spinAnim.interpolate({
+        inputRange: [0, 1],
+        outputRange: ['0deg', '360deg']
+    });
 
     // Function to get connection mode
     const getConnectionMode = async (): Promise<'online' | 'offline'> => {
@@ -114,7 +166,8 @@ export default function PosScreen() {
                         stocks: Number(item.stocks || 0),
                         status: true,
                         isOffline: true,
-                        sales: item.sales || 0
+                        sales: item.sales || 0,
+                        cupName: item.cupName || '' // ADD THIS LINE
                     }));
 
                 setMenuItems(posItems);
@@ -144,7 +197,8 @@ export default function PosScreen() {
                     has_image: data.has_image || false,
                     isOffline: false,
                     firebaseId: doc.id,
-                    sales: Number(data.sales || 0)
+                    sales: Number(data.sales || 0),
+                    cupName: data.cupName || '' // ADD THIS LINE
                 };
             });
 
@@ -165,7 +219,8 @@ export default function PosScreen() {
                     stocks: Number(item.stocks || 0),
                     status: true,
                     isOffline: true,
-                    sales: item.sales || 0
+                    sales: item.sales || 0,
+                    cupName: item.cupName || '' // ADD THIS LINE
                 }));
 
             setMenuItems(offlinePosItems);
@@ -289,6 +344,9 @@ export default function PosScreen() {
     const subtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
     const total = subtotal;
 
+    // TANGTANGON ang selectedCupItem state ug confirmCupItemAddition function
+    // I-update ang addToCart function:
+
     const addToCart = (item: MenuItem) => {
         const currentStock = menuItems.find(menuItem => menuItem.id === item.id)?.stocks || 0;
         const currentInCart = cart.find(cartItem => cartItem.id === item.id)?.quantity || 0;
@@ -298,12 +356,17 @@ export default function PosScreen() {
             return;
         }
 
+        // Check if item requires cup
+        const requiresCup = checkItemRequiresCup(item);
+
+        // Update stocks
         setMenuItems(prev => prev.map(menuItem =>
             menuItem.id === item.id
                 ? { ...menuItem, stocks: menuItem.stocks - 1 }
                 : menuItem
         ));
 
+        // Add to cart
         setCart(prev => {
             const existing = prev.find(cartItem => cartItem.id === item.id);
             if (existing) {
@@ -315,11 +378,62 @@ export default function PosScreen() {
             }
             return [...prev, { ...item, quantity: 1 }];
         });
-    };
 
+        // If item requires cup, increment cup count
+        if (requiresCup) {
+            setCupCount(prev => prev + 1);
+        }
+    };
+    const confirmCupItemAddition = () => {
+        if (!selectedCupItem || cupCount === 0) {
+            Alert.alert('Invalid Quantity', 'Please select at least 1 cup');
+            return;
+        }
+
+        const item = selectedCupItem;
+        const currentStock = menuItems.find(menuItem => menuItem.id === item.id)?.stocks || 0;
+
+        if (cupCount > currentStock) {
+            Alert.alert('Out of Stock', `Only ${currentStock} ${item.name} available!`);
+            return;
+        }
+
+        // Update stocks
+        setMenuItems(prev => prev.map(menuItem =>
+            menuItem.id === item.id
+                ? { ...menuItem, stocks: menuItem.stocks - cupCount }
+                : menuItem
+        ));
+
+        // Add to cart
+        setCart(prev => {
+            const existing = prev.find(cartItem => cartItem.id === item.id);
+            if (existing) {
+                return prev.map(cartItem =>
+                    cartItem.id === item.id
+                        ? { ...cartItem, quantity: cartItem.quantity + cupCount }
+                        : cartItem
+                );
+            }
+            return [...prev, { ...item, quantity: cupCount }];
+        });
+
+        // Reset cup selection
+        setSelectedCupItem(null);
+        setCupCount(0);
+    };
     const removeFromCart = (id: string) => {
         const cartItem = cart.find(item => item.id === id);
+        const menuItem = menuItems.find(item => item.id === id);
+
         if (cartItem) {
+            const requiresCup = menuItem ? checkItemRequiresCup(menuItem) : false;
+
+            // Update cup count if item requires cup
+            if (requiresCup) {
+                setCupCount(prev => Math.max(0, prev - cartItem.quantity));
+            }
+
             setMenuItems(prev => prev.map(menuItem =>
                 menuItem.id === id
                     ? { ...menuItem, stocks: menuItem.stocks + cartItem.quantity }
@@ -336,6 +450,7 @@ export default function PosScreen() {
         if (!cartItem || !menuItem) return;
 
         const quantityDifference = newQuantity - cartItem.quantity;
+        const requiresCup = checkItemRequiresCup(menuItem);
 
         if (newQuantity === 0) {
             removeFromCart(id);
@@ -356,6 +471,11 @@ export default function PosScreen() {
         setCart(prev => prev.map(item =>
             item.id === id ? { ...item, quantity: newQuantity } : item
         ));
+
+        // Update cup count if item requires cup
+        if (requiresCup) {
+            setCupCount(prev => prev + quantityDifference);
+        }
     };
 
     const clearCart = () => {
@@ -368,6 +488,7 @@ export default function PosScreen() {
         });
         setCart([]);
         setCustomerName('');
+        setCupCount(0); // Reset cup count when clearing cart
     };
 
     // Update item stocks and sales in Firebase
@@ -411,6 +532,7 @@ export default function PosScreen() {
         }
 
         setLoading(true);
+        setIsProcessingOrder(true);
         try {
             const syncService = OfflineSyncService.getInstance();
             const connectionMode = await getConnectionMode();
@@ -422,11 +544,13 @@ export default function PosScreen() {
                 subtotal: subtotal,
                 total: total,
                 timestamp: new Date().toISOString(),
-                status: 'unpaid' // UNPAID LANG GYUD TANAN
+                status: 'unpaid',
+                cupsUsed: cupCount // ADD THIS LINE
             };
 
             console.log('🔄 [FIREBASE ORDER] Starting order process...');
             console.log('🌐 Current Mode:', connectionMode === 'offline' ? 'OFFLINE' : 'ONLINE');
+            console.log('🥤 Total cups used in this order:', cupCount);
 
             // STEP 1: ALWAYS SAVE TO LOCAL STORAGE FIRST
             console.log('💾 Step 1: Saving to LOCAL storage...');
@@ -437,9 +561,15 @@ export default function PosScreen() {
 
             console.log('✅ Step 1 COMPLETE: Saved to LOCAL storage');
 
-            // STEP 2: TRY TO SAVE TO FIREBASE IF ONLINE
+            // STEP 2: UPDATE CUP STOCKS (BOTH ONLINE AND OFFLINE)
+            console.log('🥤 Step 2: Updating cup stocks...');
+            if (cupCount > 0) {
+                await updateCupStocksForOrder(cupCount, connectionMode);
+            }
+
+            // STEP 3: TRY TO SAVE TO FIREBASE IF ONLINE
             if (connectionMode === 'online') {
-                console.log('🔥 Step 2: Attempting to save to FIREBASE...');
+                console.log('🔥 Step 3: Attempting to save to FIREBASE...');
 
                 try {
                     // Save order to Firebase
@@ -455,15 +585,16 @@ export default function PosScreen() {
                         })),
                         subtotal: receiptData.subtotal,
                         total: receiptData.total,
-                        status: receiptData.status, // KINI AUTOMATICALLY MA-UNPAY NA
+                        status: receiptData.status,
                         timestamp: receiptData.timestamp,
-                        created_at: new Date().toISOString()
+                        created_at: new Date().toISOString(),
+                        cups_used: cupCount // Track cups used in order
                     };
 
                     const docRef = await addDoc(collection(db, 'orders'), orderData);
                     const firebaseId = docRef.id;
 
-                    console.log('✅ Step 2 COMPLETE: Saved to FIREBASE successfully:', {
+                    console.log('✅ Step 3 COMPLETE: Saved to FIREBASE successfully:', {
                         firebaseId: firebaseId,
                         orderId: receiptData.orderId
                     });
@@ -471,8 +602,8 @@ export default function PosScreen() {
                     // Update receipt data with Firebase ID
                     receiptData.firebaseId = firebaseId;
 
-                    // STEP 3: UPDATE ITEM STOCKS AND SALES IN FIREBASE
-                    console.log('📦 Step 3: Updating item stocks and sales in Firebase...');
+                    // STEP 4: UPDATE ITEM STOCKS AND SALES IN FIREBASE
+                    console.log('📦 Step 4: Updating item stocks and sales in Firebase...');
 
                     for (const cartItem of cart) {
                         const currentItem = menuItems.find(item => item.id === cartItem.id);
@@ -490,10 +621,10 @@ export default function PosScreen() {
                         }
                     }
 
-                    console.log('✅ Step 3 COMPLETE: All item stocks updated in Firebase');
+                    console.log('✅ Step 4 COMPLETE: All item stocks updated in Firebase');
 
-                    // STEP 4: UPDATE LOCAL STORAGE WITH FIREBASE INFO
-                    console.log('🔄 Step 4: Updating local record with Firebase info...');
+                    // STEP 5: UPDATE LOCAL STORAGE WITH FIREBASE INFO
+                    console.log('🔄 Step 5: Updating local record with Firebase info...');
                     const updatedReceipts = receipts.map((receipt: ReceiptData) =>
                         receipt.orderId === receiptData.orderId
                             ? { ...receipt, firebaseId: firebaseId }
@@ -501,7 +632,7 @@ export default function PosScreen() {
                     );
                     await syncService.setItem('pendingReceipts', JSON.stringify(updatedReceipts));
 
-                    console.log('✅ Step 4 COMPLETE: Local record updated with Firebase ID');
+                    console.log('✅ Step 5 COMPLETE: Local record updated with Firebase ID');
 
                     console.log('🎉 [FIREBASE ORDER] ORDER PROCESS COMPLETED SUCCESSFULLY!');
 
@@ -510,10 +641,10 @@ export default function PosScreen() {
                     console.log('📱 Order saved to local storage only. Firebase sync will be retried later.');
                 }
             } else {
-                console.log('📱 Step 2: Offline mode - Only saved to LOCAL storage');
+                console.log('📱 Step 3: Offline mode - Only saved to LOCAL storage');
             }
 
-            // Show receipt modal
+            // Show receipt modal AFTER processing is complete
             setCurrentReceipt(receiptData);
             setShowReceiptModal(true);
 
@@ -531,13 +662,144 @@ export default function PosScreen() {
                 subtotal: subtotal,
                 total: total,
                 timestamp: new Date().toLocaleString(),
-                status: 'unpaid' // CHANGE FROM 'paid' TO 'unpaid'
+                status: 'unpaid'
             };
             setCurrentReceipt(receiptData);
             setShowReceiptModal(true);
         } finally {
             setLoading(false);
+            setIsProcessingOrder(false);
         }
+    };
+    // Function to update cup stocks when order is placed
+    // Function to update cup stocks when order is placed
+    const updateCupStocksForOrder = async (cupsUsed: number, connectionMode: 'online' | 'offline') => {
+        try {
+            const syncService = OfflineSyncService.getInstance();
+
+            console.log(`🥤 Updating cup stocks: ${cupsUsed} cups used`);
+
+            if (connectionMode === 'online') {
+                // ONLINE MODE: Update cups in Firebase
+                console.log('🔥 Updating cup stocks in Firebase...');
+
+                // Get all cups from Firebase
+                const cupsCollection = collection(db, 'cups');
+                const cupsSnapshot = await getDocs(cupsCollection);
+                const firebaseCups: CupItem[] = cupsSnapshot.docs.map(doc => ({
+                    id: doc.id,
+                    firebaseId: doc.id,
+                    name: doc.data().name || 'Cup',
+                    stocks: doc.data().stocks || 0,
+                    size: doc.data().size || '',
+                    status: doc.data().status !== false,
+                    isOffline: false
+                }));
+
+                if (firebaseCups.length === 0) {
+                    console.log('❌ No cups found in Firebase');
+                    return;
+                }
+
+                // For simplicity, use the first available cup
+                // You might want to implement more complex logic here
+                const cupToUpdate = firebaseCups[0];
+                const newStocks = Math.max(0, cupToUpdate.stocks - cupsUsed);
+
+                if (newStocks < 0) {
+                    console.log('❌ Not enough cup stocks available');
+                    Alert.alert('Insufficient Cups', 'Not enough cups in stock!');
+                    return;
+                }
+
+                // Update Firebase
+                const cupDoc = doc(db, 'cups', cupToUpdate.id);
+                await updateDoc(cupDoc, {
+                    stocks: newStocks,
+                    updated_at: new Date().toISOString()
+                });
+
+                console.log('✅ Firebase cup stocks updated:', {
+                    cup: cupToUpdate.name,
+                    previousStocks: cupToUpdate.stocks,
+                    newStocks: newStocks,
+                    cupsUsed: cupsUsed
+                });
+
+                // Also update local storage for consistency
+                const localCups = await syncService.getCups();
+                if (localCups.length > 0) {
+                    const updatedLocalCups = localCups.map(cup =>
+                        cup.id === cupToUpdate.id || cup.firebaseId === cupToUpdate.id
+                            ? { ...cup, stocks: newStocks }
+                            : cup
+                    );
+                    await syncService.saveCups(updatedLocalCups);
+                    console.log('✅ Local cup stocks updated');
+                }
+
+            } else {
+                // OFFLINE MODE: Update cups in local storage only
+                console.log('📱 Updating cup stocks in local storage...');
+
+                const localCups = await syncService.getCups();
+                if (localCups.length === 0) {
+                    console.log('❌ No cups found in local storage');
+                    return;
+                }
+
+                // Use the first available cup
+                const cupToUpdate = localCups[0];
+                const newStocks = Math.max(0, cupToUpdate.stocks - cupsUsed);
+
+                if (newStocks < 0) {
+                    console.log('❌ Not enough cup stocks available');
+                    Alert.alert('Insufficient Cups', 'Not enough cups in stock!');
+                    return;
+                }
+
+                const updatedLocalCups = localCups.map(cup =>
+                    cup.id === cupToUpdate.id
+                        ? { ...cup, stocks: newStocks }
+                        : cup
+                );
+
+                await syncService.saveCups(updatedLocalCups);
+
+                console.log('✅ Local cup stocks updated:', {
+                    cup: cupToUpdate.name,
+                    previousStocks: cupToUpdate.stocks,
+                    newStocks: newStocks,
+                    cupsUsed: cupsUsed
+                });
+
+                // Add to pending items for Firebase sync when online
+                const pendingItem: PendingItem = {
+                    id: `cup_update_${Date.now()}`,
+                    type: 'UPDATE_CUP',
+                    data: {
+                        ...cupToUpdate,
+                        stocks: newStocks
+                    },
+                    timestamp: Date.now(),
+                    retryCount: 0
+                };
+
+                const pendingItems = await syncService.getPendingItems();
+                pendingItems.push(pendingItem);
+                await syncService.setItem('pendingItems', JSON.stringify(pendingItems));
+
+                console.log('📬 Cup stock update added to pending sync');
+            }
+
+        } catch (error) {
+            console.error('❌ Error updating cup stocks:', error);
+            Alert.alert('Warning', 'Cup stocks may not have been updated properly.');
+        }
+    };
+    // Update this function to be more specific:
+    const checkItemRequiresCup = (item: MenuItem): boolean => {
+        return !!item.cupName && item.cupName.trim() !== '' && item.stocks > 0;
     };
 
     const handlePrintReceipt = () => {
@@ -560,9 +822,6 @@ export default function PosScreen() {
         }
         return null;
     };
-
-    // ... (keep all the render methods and JSX the same as your original code)
-    // The rest of the component (renderMenuItems, JSX, and styles) remains exactly the same
 
     const renderMenuItems = () => {
         if (loading) {
@@ -639,11 +898,20 @@ export default function PosScreen() {
                                         ]}>
                                             Stock: {item.stocks}
                                         </ThemedText>
+
                                     </ThemedView>
                                     <ThemedView style={styles.bottomRow}>
                                         <ThemedText style={styles.itemPrice}>
                                             ₱{item.price.toFixed(2)}
                                         </ThemedText>
+                                        {checkItemRequiresCup(item) && (
+                                            <ThemedView style={styles.cupIndicator}>
+                                                <Feather name="coffee" size={10} color="#FFFEEA" />
+
+                                            </ThemedView>
+                                        )}
+                                        {/* Simple Cup Counter - Always show if there are cup items in cart */}
+
                                         <TouchableOpacity
                                             style={[
                                                 styles.addButton,
@@ -705,13 +973,6 @@ export default function PosScreen() {
                 <ThemedView style={styles.content}>
                     <ThemedView style={styles.orderSection}>
                         <ThemedText style={styles.sectionTitle}>Order Summary</ThemedText>
-
-                        <ThemedText style={styles.modeInfo}>
-                            {isOnlineMode
-                                ? 'Connected to Firebase'
-                                : 'Using local storage'
-                            }
-                        </ThemedText>
 
                         <ThemedView style={styles.customerInputContainer}>
                             <ThemedText style={styles.inputLabel}>Customer Name:</ThemedText>
@@ -787,25 +1048,26 @@ export default function PosScreen() {
                             <TouchableOpacity
                                 style={styles.cancelButton}
                                 onPress={clearCart}
-                                disabled={loading}
+                                disabled={loading || isProcessingOrder}
                             >
                                 <ThemedText style={styles.cancelButtonText}>
-                                    {loading ? 'Processing...' : 'Cancel'}
+                                    {isProcessingOrder ? 'Processing...' : 'Cancel'}
                                 </ThemedText>
                             </TouchableOpacity>
                             <TouchableOpacity
-                                style={[styles.placeOrderButton, loading && styles.placeOrderButtonDisabled]}
+                                style={[styles.placeOrderButton, (loading || isProcessingOrder) && styles.placeOrderButtonDisabled]}
                                 onPress={placeOrder}
-                                disabled={loading || cart.length === 0}
+                                disabled={loading || isProcessingOrder || cart.length === 0}
                             >
                                 <ThemedText style={styles.placeOrderButtonText}>
-                                    {loading ? 'Processing...' : 'Place Order'}
+                                    {isProcessingOrder ? 'Processing...' : 'Place Order'}
                                 </ThemedText>
                             </TouchableOpacity>
                         </ThemedView>
                     </ThemedView>
 
                     <ThemedView style={styles.menuSection}>
+
                         <ThemedView style={styles.menuHeader}>
                             <ThemedView style={styles.searchContainer}>
                                 <Feather name="search" size={18} color="#874E3B" style={styles.searchIcon} />
@@ -825,6 +1087,16 @@ export default function PosScreen() {
                                     <Feather name="refresh-cw" size={18} color="#874E3B" />
                                 </TouchableOpacity>
                             </ThemedView>
+
+                            {/* Simple Cup Counter - Always show if there are cup items in cart */}
+                            {cupCount > 0 && (
+                                <ThemedView style={styles.cupCounterContainer}>
+                                    <Feather name="coffee" size={16} color="#874E3B" />
+                                    <ThemedText style={styles.cupCounterLabel}>
+                                        Total Cups: {cupCount}
+                                    </ThemedText>
+                                </ThemedView>
+                            )}
                         </ThemedView>
 
                         <ScrollView
@@ -893,6 +1165,21 @@ export default function PosScreen() {
                     </ThemedView>
                 </ThemedView>
             </ImageBackground>
+
+            {/* PROCESSING MODAL */}
+            {isProcessingOrder && (
+                <ThemedView style={styles.processingOverlay}>
+                    <ThemedView style={styles.processingModal}>
+                        <ThemedView style={styles.spinnerContainer}>
+                            <Animated.View style={{ transform: [{ rotate: spin }] }}>
+                                <Feather name="loader" size={32} color="#874E3B" />
+                            </Animated.View>
+                        </ThemedView>
+                        <ThemedText style={styles.processingText}>Processing Order...</ThemedText>
+                        <ThemedText style={styles.processingSubText}>Please wait while we save your order</ThemedText>
+                    </ThemedView>
+                </ThemedView>
+            )}
 
             {showReceiptModal && currentReceipt && (
                 <ThemedView style={styles.modalOverlay}>
@@ -1010,10 +1297,10 @@ const styles = StyleSheet.create({
     },
     menuHeader: {
         marginBottom: 12,
+        backgroundColor: "#fffecaF2"
     },
     sectionTitle: {
         fontSize: 18,
-
         marginBottom: 5,
         textAlign: 'center',
         fontFamily: 'LobsterTwoItalic',
@@ -1128,7 +1415,6 @@ const styles = StyleSheet.create({
     totalsSection: {
         borderTopWidth: 2,
         borderTopColor: '#874E3B',
-        paddingTop: 8,
         marginBottom: 12,
     },
     totalRow: {
@@ -1300,6 +1586,89 @@ const styles = StyleSheet.create({
         borderRadius: 10,
         overflow: 'hidden',
     },
+    // Add these styles to your StyleSheet:
+
+    // Cup Counter Styles
+    cupCounterContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: 'rgba(255, 254, 234, 0.95)',
+        borderWidth: 1,
+        borderColor: '#D4A574',
+        borderRadius: 8,
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        marginTop: 8,
+        alignSelf: 'flex-start',
+    },
+    cupCounterLabel: {
+        fontSize: 14,
+        color: '#874E3B',
+        fontWeight: '500',
+        marginRight: 8,
+    },
+    cupCounterControls: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    cupCounterButton: {
+        width: 24,
+        height: 24,
+        borderRadius: 12,
+        backgroundColor: '#F5E6D3',
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#D4A574',
+    },
+    cupCounterValue: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#874E3B',
+        minWidth: 20,
+        textAlign: 'center',
+    },
+
+    // Cup Indicator Styles
+    cupIndicator: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: 'rgba(135, 78, 59, 0.8)',
+        paddingHorizontal: 4,
+        paddingVertical: 2,
+        borderRadius: 4,
+        marginLeft: 30,
+        alignSelf: 'flex-start',
+        marginTop: 9,
+    },
+    cupIndicatorText: {
+        fontSize: 8,
+        color: '#FFFEEA',
+        marginLeft: 2,
+        fontWeight: 'bold',
+    },
+
+    // Cup Confirmation Modal Styles (optional - if you want a confirmation)
+    cupConfirmationModal: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        zIndex: 1000,
+    },
+    cupConfirmationContent: {
+        backgroundColor: '#FFFEEA',
+        borderRadius: 12,
+        padding: 20,
+        borderWidth: 2,
+        borderColor: '#D4A574',
+        width: '80%',
+    },
     itemImage: {
         width: '100%',
         height: '100%',
@@ -1324,6 +1693,12 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         gap: 8,
         marginBottom: 8,
+    },
+    cupCounterSubText: {
+        fontSize: 10,
+        color: '#874E3B',
+        fontStyle: 'italic',
+        marginLeft: 4,
     },
     reloadButton: {
         width: 40,
@@ -1442,6 +1817,35 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
         paddingVertical: 60,
+        backgroundColor: 'transparent',
+    },
+    // Add these styles to your StyleSheet:
+
+    confirmCupButton: {
+        backgroundColor: '#874E3B',
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 6,
+        marginLeft: 8,
+    },
+    confirmCupButtonText: {
+        color: '#FFFEEA',
+        fontSize: 12,
+        fontWeight: 'bold',
+    },
+    cancelCupButton: {
+        backgroundColor: '#E8D8C8',
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 6,
+        borderWidth: 1,
+        borderColor: '#D4A574',
+        marginLeft: 4,
+    },
+    cancelCupButtonText: {
+        color: '#874E3B',
+        fontSize: 12,
+        fontWeight: 'bold',
     },
     emptyMenuText: {
         fontSize: 16,
@@ -1487,16 +1891,19 @@ const styles = StyleSheet.create({
         fontStyle: 'italic',
     },
     customerInputContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
         marginBottom: 12,
         backgroundColor: "#fffecaF2",
     },
     inputLabel: {
         fontSize: 14,
         color: '#5A3921',
-        marginBottom: 8,
         fontWeight: '500',
+        width: 115
     },
     customerInput: {
+        flex: 1,
         backgroundColor: 'rgba(255, 254, 234, 0.95)',
         borderWidth: 2,
         borderColor: '#D4A574',
@@ -1646,5 +2053,46 @@ const styles = StyleSheet.create({
         color: '#874E3B',
         fontSize: 14,
         fontWeight: 'bold',
+    },
+    // NEW PROCESSING STYLES
+    processingOverlay: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: 'rgba(0, 0, 0, 0.7)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        zIndex: 999,
+    },
+    processingModal: {
+        width: '70%',
+        backgroundColor: '#FFFEEA',
+        borderRadius: 12,
+        borderWidth: 2,
+        borderColor: '#D4A574',
+        padding: 24,
+        alignItems: 'center',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3,
+        shadowRadius: 8,
+        elevation: 10,
+    },
+    spinnerContainer: {
+        marginBottom: 16,
+    },
+    processingText: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        color: '#874E3B',
+        textAlign: 'center',
+        marginBottom: 8,
+    },
+    processingSubText: {
+        fontSize: 14,
+        color: '#5A3921',
+        textAlign: 'center',
     },
 });

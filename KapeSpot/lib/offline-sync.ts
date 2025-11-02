@@ -17,13 +17,14 @@ import {
 } from 'firebase/firestore';
 import { app } from './firebase-config';
 
+// In offline-sync.ts - update the PendingItem interface
 interface PendingItem {
-  id: string;
-  type: 'CREATE_ITEM' | 'UPDATE_ITEM' | 'DELETE_ITEM' | 'CREATE_CATEGORY' | 'UPDATE_CATEGORY' | 'DELETE_CATEGORY' | 'CREATE_ORDER' | 'UPDATE_ORDER';
-  data: any;
-  timestamp: number;
-  retryCount: number;
-  serverId?: string;
+    id: string;
+    type: 'CREATE_ITEM' | 'UPDATE_ITEM' | 'DELETE_ITEM' | 'CREATE_CATEGORY' | 'UPDATE_CATEGORY' | 'DELETE_CATEGORY' | 'CREATE_CUP' | 'UPDATE_CUP' | 'DELETE_CUP' | 'CREATE_ORDER' | 'UPDATE_ORDER';
+    data: any;
+    timestamp: number;
+    retryCount: number;
+    serverId?: string;
 }
 
 interface ReceiptData {
@@ -36,6 +37,19 @@ interface ReceiptData {
   status: 'unpaid' | 'paid' | 'cancelled';
   firebaseId?: string;
 }
+// ADD CUPITEM INTERFACE HERE
+interface CupItem {
+    id: string;
+    name: string;
+    stocks: number;
+    size?: string;
+    status?: boolean;
+    isOffline?: boolean;
+    firebaseId?: string;
+    syncStatus?: string;
+    lastUpdated?: number;
+    lastSynced?: number;
+  }
 
 interface Category {
   id: string;
@@ -194,6 +208,25 @@ export class OfflineSyncService {
 
         // Check for duplicates in local storage first
         const localItems = await this.getLocalItems();
+        
+        // If this is an online item with Firebase ID, remove any existing offline duplicates
+        if (isOnline && itemData.firebaseId) {
+            const duplicateOfflineItems = localItems.filter(item => 
+                (item.code === itemData.code || item.name === itemData.name) && item.isOffline
+            );
+            
+            if (duplicateOfflineItems.length > 0) {
+                console.log('🧹 Removing duplicate offline items:', duplicateOfflineItems.length);
+                const cleanedItems = localItems.filter(item => 
+                    !(item.code === itemData.code && item.isOffline)
+                );
+                await this.setItem('localItems', JSON.stringify(cleanedItems));
+                // Update localItems reference after cleaning
+                localItems.length = 0;
+                localItems.push(...cleanedItems);
+            }
+        }
+
         const existingItem = localItems.find(item => 
             item.code === itemData.code || 
             item.name === itemData.name
@@ -257,7 +290,7 @@ export class OfflineSyncService {
         if (!isOnline) {
             const pendingItem: PendingItem = {
                 id: itemId,
-                type: 'CREATE_ITEM',
+                type: existingItemIndex !== -1 ? 'UPDATE_ITEM' : 'CREATE_ITEM',
                 data: itemData,
                 timestamp: Date.now(),
                 retryCount: 0
@@ -266,16 +299,19 @@ export class OfflineSyncService {
             const pendingItems = await this.getPendingItems();
             console.log('📬 [LOCAL STORAGE] Current pending items:', pendingItems.length);
             
-            pendingItems.push(pendingItem);
-            await this.setItem('pendingItems', JSON.stringify(pendingItems));
+            // Remove any existing pending item with same ID to avoid duplicates
+            const filteredPendingItems = pendingItems.filter(item => item.id !== itemId);
+            filteredPendingItems.push(pendingItem);
+            
+            await this.setItem('pendingItems', JSON.stringify(filteredPendingItems));
             
             await this.updateSyncStatus({ 
-                pendingItems: pendingItems.length,
+                pendingItems: filteredPendingItems.length,
                 lastSyncAttempt: Date.now()
             });
             
             console.log('📬 [LOCAL STORAGE] ✅ Item added to pending sync queue');
-            console.log('🔄 [LOCAL STORAGE] Pending items count:', pendingItems.length);
+            console.log('🔄 [LOCAL STORAGE] Pending items count:', filteredPendingItems.length);
 
             // Try to sync immediately if online
             if (this.syncStatus.isOnline) {
@@ -296,7 +332,6 @@ export class OfflineSyncService {
         return { success: false, id: '', isOffline: true };
     }
 }
-
   // Get items from local storage (primary source)
   async getItems(): Promise<any[]> {
     try {
@@ -650,6 +685,105 @@ export class OfflineSyncService {
                             updatedPendingItems.splice(orderIndex, 1);
                         }
                         break;
+                        // In the trySync method, add these cases for cups (after the existing switch cases):
+
+case 'CREATE_CUP':
+    console.log('🔥 Creating cup in Firebase:', pendingItem.data.name);
+    
+    const cupData = {
+        name: pendingItem.data.name,
+        size: pendingItem.data.size || '',
+        stocks: Number(pendingItem.data.stocks) || 0,
+        status: pendingItem.data.status !== false,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+    };
+
+    const cupDocRef = await addDoc(collection(this.db, 'cups'), cupData);
+    const cupFirebaseId = cupDocRef.id;
+    
+    console.log('✅ Cup created in Firebase:', {
+        name: pendingItem.data.name,
+        firebaseId: cupFirebaseId
+    });
+
+    // Update local storage with Firebase ID
+    const currentCups = await this.getCups();
+    const updatedCups = currentCups.map(cup => 
+        cup.id === pendingItem.id 
+            ? { 
+                ...cup, 
+                id: cupFirebaseId, 
+                firebaseId: cupFirebaseId,
+                isOffline: false, 
+                syncStatus: 'synced',
+                lastSynced: Date.now()
+            }
+            : cup
+    );
+    await this.saveCups(updatedCups);
+    
+    success = true;
+    successCount++;
+    
+    // Remove from pending items array
+    const cupIndex = updatedPendingItems.findIndex(item => item.id === pendingItem.id);
+    if (cupIndex !== -1) {
+        updatedPendingItems.splice(cupIndex, 1);
+    }
+    break;
+
+case 'UPDATE_CUP':
+    console.log('🔥 Updating cup in Firebase:', pendingItem.data.name);
+    
+    if (pendingItem.data.firebaseId) {
+        const cupDoc = doc(this.db, 'cups', pendingItem.data.firebaseId);
+        await updateDoc(cupDoc, {
+            name: pendingItem.data.name,
+            size: pendingItem.data.size || '',
+            stocks: Number(pendingItem.data.stocks) || 0,
+            status: pendingItem.data.status !== false,
+            updated_at: new Date().toISOString()
+        });
+        
+        console.log('✅ Cup updated in Firebase:', pendingItem.data.name);
+        success = true;
+        successCount++;
+        
+        // Remove from pending items array
+        const updateCupIndex = updatedPendingItems.findIndex(item => item.id === pendingItem.id);
+        if (updateCupIndex !== -1) {
+            updatedPendingItems.splice(updateCupIndex, 1);
+        }
+    } else {
+        console.log('❌ No Firebase ID for cup update:', pendingItem.data.name);
+        updatedPendingItems[i].retryCount += 1;
+        failCount++;
+    }
+    break;
+
+case 'DELETE_CUP':
+    console.log('🔥 Deleting cup from Firebase:', pendingItem.data.name);
+    
+    if (pendingItem.data.firebaseId) {
+        const cupDoc = doc(this.db, 'cups', pendingItem.data.firebaseId);
+        await deleteDoc(cupDoc);
+        
+        console.log('✅ Cup deleted from Firebase:', pendingItem.data.name);
+        success = true;
+        successCount++;
+        
+        // Remove from pending items array
+        const deleteCupIndex = updatedPendingItems.findIndex(item => item.id === pendingItem.id);
+        if (deleteCupIndex !== -1) {
+            updatedPendingItems.splice(deleteCupIndex, 1);
+        }
+    } else {
+        console.log('❌ No Firebase ID for cup delete:', pendingItem.data.name);
+        updatedPendingItems[i].retryCount += 1;
+        failCount++;
+    }
+    break;
                 }
 
             } catch (error) {
@@ -775,31 +909,41 @@ export class OfflineSyncService {
   }
 
   // ADD CUPS METHODS HERE - USING SECURESTORE
-  async saveCups(cups: CupItem[]): Promise<void> {
+  // Save cups method - FIXED: Prevent duplicates
+async saveCups(cups: CupItem[]): Promise<void> {
     try {
         console.log('💽 [LOCAL STORAGE] Starting cups save process...');
         console.log('📊 [LOCAL STORAGE] Saving cups:', cups.length, 'cups');
         
-        cups.forEach((cup: CupItem, index: number) => {
+        // Remove duplicates based on ID
+        const uniqueCups = cups.filter((cup, index, self) => 
+            index === self.findIndex(c => c.id === cup.id)
+        );
+        
+        if (uniqueCups.length !== cups.length) {
+            console.log('🧹 Removed duplicate cups:', cups.length - uniqueCups.length);
+        }
+        
+        uniqueCups.forEach((cup: CupItem, index: number) => {
             console.log(`🥤 [LOCAL STORAGE] Cup ${index + 1}:`, {
                 name: cup.name,
                 stocks: cup.stocks,
-                size: cup.size
+                size: cup.size,
+                isOffline: cup.isOffline
             });
         });
         
-        await AsyncStorage.setItem('cups_data', JSON.stringify(cups));
+        await AsyncStorage.setItem('cups_data', JSON.stringify(uniqueCups));
         console.log('💾 [LOCAL STORAGE] ✅ Cups saved to local storage successfully!');
-        console.log('📈 [LOCAL STORAGE] Total cups saved:', cups.length);
+        console.log('📈 [LOCAL STORAGE] Total cups saved:', uniqueCups.length);
     } catch (error) {
         console.error('❌ [LOCAL STORAGE] ERROR saving cups to local storage:', error);
         throw error;
     }
 }
-
 async getCups(): Promise<CupItem[]> {
   try {
-      const cupsData = await AsyncStorage.getItem('cups_data');
+      const cupsData = await AsyncStorage.getItem('cups');
       if (cupsData) {
           const cups = JSON.parse(cupsData);
           console.log('🔍 [LOCAL STORAGE] Retrieved cups from local storage:', cups.length, 'cups');
@@ -834,109 +978,128 @@ async deleteLocalCup(id: string): Promise<boolean> {
     }
 }
 
+// Save category method - FIXED: Prevent duplicates
 async saveCategory(categoryData: any, isOnline: boolean = false): Promise<{ success: boolean; id: string; isOffline: boolean }> {
-  try {
-      console.log('💽 [LOCAL STORAGE] Starting category save process...', { 
-          categoryName: categoryData.name, 
-          isOnline 
-      });
+    try {
+        console.log('💽 [LOCAL STORAGE] Starting category save process...', { 
+            categoryName: categoryData.name, 
+            isOnline 
+        });
 
-      // Use existing ID if provided (for updates), otherwise generate new one
-      const categoryId = categoryData.id || (isOnline ? `server_${Date.now()}` : `offline_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`);
-      
-      // ALWAYS SAVE TO LOCAL STORAGE FOR BACKUP
-      const localCategories = await this.getLocalCategories();
-      console.log('📊 [LOCAL STORAGE] Current local categories count:', localCategories.length);
-      
-      const existingCategoryIndex = localCategories.findIndex(cat => 
-          cat.id === categoryData.id || 
-          (cat.name.toLowerCase() === categoryData.name.toLowerCase() && !categoryData.id)
-      );
-      
-      const saveData = {
-          ...categoryData,
-          id: categoryId,
-          isOffline: !isOnline,
-          syncStatus: isOnline ? 'synced' : 'pending',
-          lastUpdated: Date.now(),
-          ...(!categoryData.created && { created: Date.now() }) // Only set created time if not already set
-      };
+        // Use existing ID if provided (for updates), otherwise generate new one
+        const categoryId = categoryData.id || (isOnline ? `server_${Date.now()}` : `offline_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`);
+        
+        // ALWAYS SAVE TO LOCAL STORAGE FOR BACKUP
+        const localCategories = await this.getLocalCategories();
+        console.log('📊 [LOCAL STORAGE] Current local categories count:', localCategories.length);
+        
+        // If this is an online category with Firebase ID, remove any existing offline duplicates
+        if (isOnline && categoryData.firebaseId) {
+            const duplicateOfflineCategories = localCategories.filter(cat => 
+                cat.name.toLowerCase() === categoryData.name.toLowerCase() && cat.isOffline
+            );
+            
+            if (duplicateOfflineCategories.length > 0) {
+                console.log('🧹 Removing duplicate offline categories:', duplicateOfflineCategories.length);
+                const cleanedCategories = localCategories.filter(cat => 
+                    !(cat.name.toLowerCase() === categoryData.name.toLowerCase() && cat.isOffline)
+                );
+                await this.setItem('localCategories', JSON.stringify(cleanedCategories));
+                // Update localCategories reference after cleaning
+                localCategories.length = 0;
+                localCategories.push(...cleanedCategories);
+            }
+        }
+        
+        const existingCategoryIndex = localCategories.findIndex(cat => 
+            cat.id === categoryData.id || 
+            (cat.name.toLowerCase() === categoryData.name.toLowerCase() && !categoryData.id)
+        );
+        
+        const saveData = {
+            ...categoryData,
+            id: categoryId,
+            isOffline: !isOnline,
+            syncStatus: isOnline ? 'synced' : 'pending',
+            lastUpdated: Date.now(),
+            ...(!categoryData.created && { created: Date.now() }) // Only set created time if not already set
+        };
 
-      if (existingCategoryIndex !== -1) {
-          // Update existing category
-          localCategories[existingCategoryIndex] = {
-              ...localCategories[existingCategoryIndex],
-              ...saveData
-          };
-          console.log('📝 [LOCAL STORAGE] ✅ UPDATED existing category:', {
-              name: categoryData.name,
-              id: categoryId,
-              isOffline: !isOnline
-          });
-      } else {
-          // Add new category
-          localCategories.push(saveData);
-          console.log('✅ [LOCAL STORAGE] ✅ ADDED new category:', {
-              name: categoryData.name,
-              id: categoryId,
-              isOffline: !isOnline
-          });
-      }
+        if (existingCategoryIndex !== -1) {
+            // Update existing category
+            localCategories[existingCategoryIndex] = {
+                ...localCategories[existingCategoryIndex],
+                ...saveData
+            };
+            console.log('📝 [LOCAL STORAGE] ✅ UPDATED existing category:', {
+                name: categoryData.name,
+                id: categoryId,
+                isOffline: !isOnline
+            });
+        } else {
+            // Add new category
+            localCategories.push(saveData);
+            console.log('✅ [LOCAL STORAGE] ✅ ADDED new category:', {
+                name: categoryData.name,
+                id: categoryId,
+                isOffline: !isOnline
+            });
+        }
 
-      await this.setItem('localCategories', JSON.stringify(localCategories));
-      console.log('💾 [LOCAL STORAGE] ✅ Category saved to local storage!');
-      console.log('📈 [LOCAL STORAGE] Total categories now:', localCategories.length);
+        await this.setItem('localCategories', JSON.stringify(localCategories));
+        console.log('💾 [LOCAL STORAGE] ✅ Category saved to local storage!');
+        console.log('📈 [LOCAL STORAGE] Total categories now:', localCategories.length);
 
-      // ALWAYS ADD TO PENDING ITEMS FOR SYNC (regardless of online/offline)
-      // This ensures sync will happen even if server was temporarily unavailable
-      if (!isOnline) {
-          const pendingCategory: PendingItem = {
-              id: categoryId,
-              type: existingCategoryIndex !== -1 ? 'UPDATE_CATEGORY' : 'CREATE_CATEGORY',
-              data: {
-                  name: categoryData.name,
-                  icon: categoryData.icon || 'folder',
-                  ...(categoryData.id && { id: categoryData.id }) // Include ID for updates
-              },
-              timestamp: Date.now(),
-              retryCount: 0
-          };
+        // ALWAYS ADD TO PENDING ITEMS FOR SYNC (regardless of online/offline)
+        // This ensures sync will happen even if server was temporarily unavailable
+        if (!isOnline) {
+            const pendingCategory: PendingItem = {
+                id: categoryId,
+                type: existingCategoryIndex !== -1 ? 'UPDATE_CATEGORY' : 'CREATE_CATEGORY',
+                data: {
+                    name: categoryData.name,
+                    icon: categoryData.icon || 'folder',
+                    ...(categoryData.id && { id: categoryData.id }) // Include ID for updates
+                },
+                timestamp: Date.now(),
+                retryCount: 0
+            };
 
-          const pendingItems = await this.getPendingItems();
-          console.log('📬 [LOCAL STORAGE] Current pending items:', pendingItems.length);
-          
-          // Remove any existing pending item with same ID to avoid duplicates
-          const filteredPendingItems = pendingItems.filter(item => item.id !== categoryId);
-          filteredPendingItems.push(pendingCategory);
-          
-          await this.setItem('pendingItems', JSON.stringify(filteredPendingItems));
-          
-          await this.updateSyncStatus({ 
-              pendingItems: filteredPendingItems.length,
-              lastSyncAttempt: Date.now()
-          });
-          
-          console.log('📬 [LOCAL STORAGE] ✅ Category added to pending sync queue');
-          console.log('🔄 [LOCAL STORAGE] Pending items count:', filteredPendingItems.length);
+            const pendingItems = await this.getPendingItems();
+            console.log('📬 [LOCAL STORAGE] Current pending items:', pendingItems.length);
+            
+            // Remove any existing pending item with same ID to avoid duplicates
+            const filteredPendingItems = pendingItems.filter(item => item.id !== categoryId);
+            filteredPendingItems.push(pendingCategory);
+            
+            await this.setItem('pendingItems', JSON.stringify(filteredPendingItems));
+            
+            await this.updateSyncStatus({ 
+                pendingItems: filteredPendingItems.length,
+                lastSyncAttempt: Date.now()
+            });
+            
+            console.log('📬 [LOCAL STORAGE] ✅ Category added to pending sync queue');
+            console.log('🔄 [LOCAL STORAGE] Pending items count:', filteredPendingItems.length);
 
-          // Try to sync immediately if online
-          if (this.syncStatus.isOnline) {
-              console.log('🚀 [LOCAL STORAGE] Immediate sync triggered for category');
-              setTimeout(() => this.trySync(), 1000);
-          } else {
-              console.log('📡 [LOCAL STORAGE] Offline - category will sync when connection is available');
-          }
-      } else {
-          console.log('🌐 [LOCAL STORAGE] Category marked as synced with server');
-      }
+            // Try to sync immediately if online
+            if (this.syncStatus.isOnline) {
+                console.log('🚀 [LOCAL STORAGE] Immediate sync triggered for category');
+                setTimeout(() => this.trySync(), 1000);
+            } else {
+                console.log('📡 [LOCAL STORAGE] Offline - category will sync when connection is available');
+            }
+        } else {
+            console.log('🌐 [LOCAL STORAGE] Category marked as synced with server');
+        }
 
-      console.log('🎉 [LOCAL STORAGE] ✅ CATEGORY SAVE COMPLETE!');
-      return { success: true, id: categoryId, isOffline: !isOnline };
+        console.log('🎉 [LOCAL STORAGE] ✅ CATEGORY SAVE COMPLETE!');
+        return { success: true, id: categoryId, isOffline: !isOnline };
 
-  } catch (error) {
-      console.error('❌ [LOCAL STORAGE] ERROR saving category:', error);
-      return { success: false, id: '', isOffline: true };
-  }
+    } catch (error) {
+        console.error('❌ [LOCAL STORAGE] ERROR saving category:', error);
+        return { success: false, id: '', isOffline: true };
+    }
 }
 
 // Get categories from local storage
@@ -1031,6 +1194,17 @@ async autoSyncWhenOnline(): Promise<void> {
   } catch (error) {
       console.error('❌ Auto-sync error:', error);
   }
+}
+// Add this method to OfflineSyncService class in offline-sync.ts
+async clearPendingReceipts(): Promise<void> {
+    try {
+        console.log('🗑️ Clearing all pending receipts from local storage...');
+        await this.setItem('pendingReceipts', JSON.stringify([]));
+        console.log('✅ All pending receipts cleared from local storage');
+    } catch (error) {
+        console.error('❌ Error clearing pending receipts:', error);
+        throw error;
+    }
 }
 
 // Get pending categories for sync

@@ -462,48 +462,7 @@ export default function LoginScreen() {
                                 {/* Role Selection (Sign Up only) */}
                                 {isSignUp && (
                                     <ThemedView style={styles.inputContainer}>
-                                        <ThemedText style={styles.inputLabel}>Account Type</ThemedText>
-                                        <ThemedView style={styles.roleContainer}>
-                                            <TouchableOpacity
-                                                style={[
-                                                    styles.roleButton,
-                                                    selectedRole === 'user' && styles.roleButtonActive
-                                                ]}
-                                                onPress={() => setSelectedRole('user')}
-                                            >
-                                                <Feather
-                                                    name="user"
-                                                    size={20}
-                                                    color={selectedRole === 'user' ? '#FFFEEA' : '#874E3B'}
-                                                />
-                                                <ThemedText style={[
-                                                    styles.roleButtonText,
-                                                    selectedRole === 'user' && styles.roleButtonTextActive
-                                                ]}>
-                                                    User
-                                                </ThemedText>
-                                            </TouchableOpacity>
 
-                                            <TouchableOpacity
-                                                style={[
-                                                    styles.roleButton,
-                                                    selectedRole === 'admin' && styles.roleButtonActive
-                                                ]}
-                                                onPress={() => setSelectedRole('admin')}
-                                            >
-                                                <Feather
-                                                    name="shield"
-                                                    size={20}
-                                                    color={selectedRole === 'admin' ? '#FFFEEA' : '#874E3B'}
-                                                />
-                                                <ThemedText style={[
-                                                    styles.roleButtonText,
-                                                    selectedRole === 'admin' && styles.roleButtonTextActive
-                                                ]}>
-                                                    Admin
-                                                </ThemedText>
-                                            </TouchableOpacity>
-                                        </ThemedView>
                                         <ThemedText style={styles.roleHelpText}>
                                             {selectedRole === 'admin'
                                                 ? 'Admin users have full access to all features'

@@ -23,7 +23,9 @@ import {
     getDocs,
     query,
     where,
-    orderBy
+    orderBy,
+    deleteDoc,
+    doc
 } from 'firebase/firestore';
 import { app } from '@/lib/firebase-config';
 
@@ -130,17 +132,106 @@ export default function LogScreen() {
         } catch (error) {
             console.error('❌ Error loading orders:', error);
             // Final fallback - try to get from local storage - PAID ORDERS ONLY
-            const syncService = OfflineSyncService.getInstance();
-            const localOrders = await syncService.getPendingReceipts();
-            const filteredOrders = localOrders.filter(order => order.status === 'paid'); // Paid only
-            filteredOrders.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-            setOrders(filteredOrders);
-            console.log('📱 Emergency fallback to local paid orders:', filteredOrders.length);
+            try {
+                const syncService = OfflineSyncService.getInstance();
+                const localOrders = await syncService.getPendingReceipts();
+                const filteredOrders = localOrders.filter(order => order.status === 'paid'); // Paid only
+                filteredOrders.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+                setOrders(filteredOrders);
+                console.log('📱 Emergency fallback to local paid orders:', filteredOrders.length);
+            } catch (fallbackError) {
+                console.error('❌ Emergency fallback failed:', fallbackError);
+                setOrders([]); // Set empty array as final fallback
+            }
         } finally {
             setLoading(false);
         }
     };
 
+    // Add delete function for both Firebase and Local
+    // Add delete function for both Firebase and Local - UPDATED
+    const deleteAllOrders = async () => {
+        Alert.alert(
+            'Delete All Orders',
+            'Are you sure you want to delete ALL orders from both Firebase and Local Storage? This action cannot be undone.',
+            [
+                {
+                    text: 'Cancel',
+                    style: 'cancel'
+                },
+                {
+                    text: 'Delete All',
+                    style: 'destructive',
+                    onPress: async () => {
+                        try {
+                            setLoading(true);
+                            const syncService = OfflineSyncService.getInstance();
+                            const connectionMode = await getConnectionMode();
+
+                            let firebaseDeletedCount = 0;
+                            let localDeletedCount = 0;
+
+                            console.log('🗑️ Starting to delete all orders...');
+
+                            // STEP 1: DELETE FROM FIREBASE IF ONLINE
+                            if (connectionMode === 'online') {
+                                try {
+                                    console.log('🔥 Deleting orders from Firebase...');
+                                    const ordersCollection = collection(db, 'orders');
+                                    const ordersSnapshot = await getDocs(ordersCollection);
+
+                                    const deletePromises = ordersSnapshot.docs.map(async (document) => {
+                                        await deleteDoc(doc(db, 'orders', document.id));
+                                        firebaseDeletedCount++;
+                                    });
+
+                                    await Promise.all(deletePromises);
+                                    console.log(`✅ Successfully deleted ${firebaseDeletedCount} orders from Firebase`);
+                                } catch (firebaseError) {
+                                    console.error('❌ Error deleting from Firebase:', firebaseError);
+                                }
+                            }
+
+                            // STEP 2: DELETE FROM LOCAL STORAGE
+                            try {
+                                console.log('📱 Deleting orders from Local Storage...');
+
+                                // Get current local orders to count them
+                                const localOrders = await syncService.getPendingReceipts();
+                                localDeletedCount = localOrders.length;
+
+                                // Clear local orders by saving empty array
+                                await syncService.setItem('pendingReceipts', JSON.stringify([]));
+
+                                console.log(`✅ Successfully deleted ${localDeletedCount} orders from Local Storage`);
+                            } catch (localError) {
+                                console.error('❌ Error deleting from Local Storage:', localError);
+                            }
+
+                            // STEP 3: SHOW SUCCESS MESSAGE AND RELOAD
+                            let successMessage = '';
+                            if (connectionMode === 'online') {
+                                successMessage = `Deleted ${firebaseDeletedCount} orders from Firebase and ${localDeletedCount} orders from Local Storage.`;
+                            } else {
+                                successMessage = `Deleted ${localDeletedCount} orders from Local Storage.`;
+                            }
+
+                            Alert.alert('Success', successMessage);
+
+                            // Reload the orders list
+                            await loadOrders();
+
+                        } catch (error) {
+                            console.error('❌ Error deleting orders:', error);
+                            Alert.alert('Error', 'Failed to delete orders. Please try again.');
+                        } finally {
+                            setLoading(false);
+                        }
+                    }
+                }
+            ]
+        );
+    };
     useFocusEffect(
         React.useCallback(() => {
             loadOrders();
@@ -230,12 +321,21 @@ export default function LogScreen() {
                         <ThemedView style={styles.headerSection}>
                             <ThemedView style={styles.headerTop}>
                                 <ThemedText style={styles.mainTitle}>Order Log</ThemedText>
-                                <TouchableOpacity
-                                    style={styles.reloadButton}
-                                    onPress={loadOrders}
-                                >
-                                    <Feather name="refresh-cw" size={18} color="#874E3B" />
-                                </TouchableOpacity>
+                                <ThemedView style={styles.headerButtons}>
+                                    <TouchableOpacity
+                                        style={styles.reloadButton}
+                                        onPress={loadOrders}
+                                    >
+                                        <Feather name="refresh-cw" size={18} color="#874E3B" />
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={styles.deleteButton}
+                                        onPress={deleteAllOrders}
+                                        disabled={loading}
+                                    >
+                                        <Feather name="trash-2" size={18} color="#DC2626" />
+                                    </TouchableOpacity>
+                                </ThemedView>
                             </ThemedView>
 
                             <ThemedText style={styles.modeInfo}>
@@ -243,25 +343,7 @@ export default function LogScreen() {
                             </ThemedText>
 
                             {/* Filter Buttons - PAID ONLY */}
-                            <ThemedView style={styles.filterContainer}>
-                                <TouchableOpacity
-                                    style={[styles.filterButton, filter === 'all' && styles.filterButtonActive]}
-                                    onPress={() => setFilter('all')}
-                                >
-                                    <ThemedText style={[styles.filterButtonText, filter === 'all' && styles.filterButtonTextActive]}>
-                                        ALL
-                                    </ThemedText>
-                                </TouchableOpacity>
-                                <TouchableOpacity
-                                    style={[styles.filterButton, filter === 'paid' && styles.filterButtonActive]}
-                                    onPress={() => setFilter('paid')}
-                                >
-                                    <Feather name="check-circle" size={14} color={filter === 'paid' ? '#FFFEEA' : '#16A34A'} />
-                                    <ThemedText style={[styles.filterButtonText, filter === 'paid' && styles.filterButtonTextActive]}>
-                                        PAID
-                                    </ThemedText>
-                                </TouchableOpacity>
-                            </ThemedView>
+
                         </ThemedView>
                     </ThemedView>
 
@@ -443,7 +525,7 @@ export default function LogScreen() {
     );
 }
 
-// Styles remain the same as previous version
+// Updated styles to include new buttons
 const styles = StyleSheet.create({
     container: {
         flex: 1,
@@ -473,6 +555,10 @@ const styles = StyleSheet.create({
         justifyContent: 'space-between',
         alignItems: 'center',
         backgroundColor: 'fffecaF2'
+    },
+    headerButtons: {
+        flexDirection: 'row',
+        gap: 8,
     },
     mainTitle: {
         fontSize: 28,
@@ -522,6 +608,26 @@ const styles = StyleSheet.create({
     },
     filterButtonTextActive: {
         color: '#FFFEEA',
+    },
+    reloadButton: {
+        width: 40,
+        height: 40,
+        borderRadius: 8,
+        backgroundColor: '#F5E6D3',
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#D4A574',
+    },
+    deleteButton: {
+        width: 40,
+        height: 40,
+        borderRadius: 8,
+        backgroundColor: '#FEE2E2',
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#FECACA',
     },
     ordersContainer: {
         flex: 1,
@@ -678,16 +784,6 @@ const styles = StyleSheet.create({
         color: '#8B7355',
         marginTop: 4,
         textAlign: 'center',
-    },
-    reloadButton: {
-        width: 40,
-        height: 40,
-        borderRadius: 8,
-        backgroundColor: '#F5E6D3',
-        justifyContent: 'center',
-        alignItems: 'center',
-        borderWidth: 1,
-        borderColor: '#D4A574',
     },
     modalOverlay: {
         flex: 1,

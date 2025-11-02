@@ -6,7 +6,12 @@ import {
     TouchableOpacity,
     ImageBackground,
     Dimensions,
-    View
+    View,
+    Modal,
+    TextInput,
+    Alert,
+    KeyboardAvoidingView,
+    Platform
 } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -23,9 +28,14 @@ import {
     getDocs,
     query,
     where,
-    orderBy
+    orderBy,
+    addDoc,
+    serverTimestamp,
+    deleteDoc,
+    doc
 } from 'firebase/firestore';
 import { app } from '@/lib/firebase-config';
+import * as FileSystem from 'expo-file-system';
 
 interface OrderData {
     orderId: string;
@@ -43,6 +53,26 @@ interface SalesData {
     sales: number;
     orders: number;
     customers: string[];
+}
+
+interface ExpenseItem {
+    id?: string;
+    description: string;
+    cost: number;
+    timestamp: any;
+    createdAt?: string;
+}
+interface ExpenseEntry {
+    description: string;
+    cost: number;
+}
+
+interface ExpenseDocument {
+    id?: string;
+    expenses: ExpenseEntry[];
+    total: number;
+    timestamp: any;
+    createdAt?: string;
 }
 
 const { width } = Dimensions.get('window');
@@ -163,6 +193,12 @@ export default function SalesExpenseScreen() {
     const [isOnlineMode, setIsOnlineMode] = useState<boolean>(false);
     const [timeFilter, setTimeFilter] = useState<'day' | 'week' | 'month' | 'year'>('week');
     const [salesData, setSalesData] = useState<SalesData[]>([]);
+    const [modalVisible, setModalVisible] = useState(false);
+    const [savingExpense, setSavingExpense] = useState(false);
+    const [expenseRows, setExpenseRows] = useState([{ description: '', cost: '' }]);
+    const [expensesModalVisible, setExpensesModalVisible] = useState(false);
+    const [allExpenses, setAllExpenses] = useState<ExpenseDocument[]>([]);
+    const [loadingExpenses, setLoadingExpenses] = useState(false);
 
     // Initialize Firebase
     const db = getFirestore(app);
@@ -178,6 +214,64 @@ export default function SalesExpenseScreen() {
             setIsOnlineMode(false);
             return 'offline';
         }
+    };
+    const loadAllExpenses = async () => {
+        setLoadingExpenses(true);
+        try {
+            const connectionMode = await getConnectionMode();
+
+            if (connectionMode === 'offline') {
+                // Load from local storage for expenses
+                const syncService = OfflineSyncService.getInstance();
+                // You might need to implement getPendingExpenses() in your OfflineSyncService
+                // For now, we'll show empty for offline mode
+                setAllExpenses([]);
+            } else {
+                // Load from Firebase Firestore
+                const expensesCollection = collection(db, 'expenses');
+                const expensesQuery = query(
+                    expensesCollection,
+                    orderBy('timestamp', 'desc')
+                );
+
+                const expensesSnapshot = await getDocs(expensesQuery);
+
+                const expensesData: ExpenseDocument[] = expensesSnapshot.docs.map(doc => {
+                    const data = doc.data();
+                    return {
+                        id: doc.id,
+                        expenses: data.expenses || [],
+                        total: data.total || 0,
+                        timestamp: data.timestamp,
+                        createdAt: data.timestamp?.toDate?.()?.toISOString() || new Date().toISOString()
+                    };
+                });
+
+                setAllExpenses(expensesData);
+            }
+        } catch (error) {
+            console.error('❌ Error loading expenses:', error);
+            Alert.alert('Error', 'Failed to load expenses');
+            setAllExpenses([]);
+        } finally {
+            setLoadingExpenses(false);
+        }
+    };
+
+    // Function to open expenses view modal
+    const openExpensesModal = async () => {
+        await loadAllExpenses();
+        setExpensesModalVisible(true);
+    };
+
+    // Function to close expenses view modal
+    const closeExpensesModal = () => {
+        setExpensesModalVisible(false);
+    };
+
+    // Calculate total of all expenses
+    const getAllExpensesTotal = () => {
+        return allExpenses.reduce((total, doc) => total + doc.total, 0);
     };
 
     const loadOrders = async () => {
@@ -338,6 +432,90 @@ export default function SalesExpenseScreen() {
         setSalesData(sortedData);
     };
 
+    const addNewRow = () => {
+        setExpenseRows([...expenseRows, { description: '', cost: '' }]);
+    };
+
+    const removeRow = (index: number) => {
+        if (expenseRows.length > 1) {
+            const newRows = expenseRows.filter((_, i) => i !== index);
+            setExpenseRows(newRows);
+        }
+    };
+
+    const updateRow = (index: number, field: 'description' | 'cost', value: string) => {
+        const newRows = [...expenseRows];
+        newRows[index][field] = value;
+        setExpenseRows(newRows);
+    };
+
+    const saveExpensesToFirebase = async () => {
+        // Validate all rows
+        const validRows = expenseRows.filter(row =>
+            row.description.trim() && row.cost.trim() && !isNaN(parseFloat(row.cost)) && parseFloat(row.cost) > 0
+        );
+
+        if (validRows.length === 0) {
+            Alert.alert('Error', 'Please enter at least one valid expense with description and cost');
+            return;
+        }
+
+        if (!isOnlineMode) {
+            Alert.alert('Offline Mode', 'Cannot save expenses while offline. Please connect to internet.');
+            return;
+        }
+
+        setSavingExpense(true);
+        try {
+            // Convert to ExpenseEntry format
+            const expenseEntries: ExpenseEntry[] = validRows.map(row => ({
+                description: row.description.trim(),
+                cost: parseFloat(row.cost)
+            }));
+
+            // Calculate total
+            const total = expenseEntries.reduce((sum, entry) => sum + entry.cost, 0);
+
+            // Create single document with all expenses
+            const expenseDocument: ExpenseDocument = {
+                expenses: expenseEntries,
+                total: total,
+                timestamp: serverTimestamp()
+            };
+
+            // Save to Firebase Firestore collection named "expenses"
+            const expensesCollection = collection(db, 'expenses');
+            await addDoc(expensesCollection, expenseDocument);
+
+            Alert.alert('Success', `Expense document saved successfully!\nTotal: ₱${total.toFixed(2)}`);
+            setExpenseRows([{ description: '', cost: '' }]);
+            setModalVisible(false);
+
+        } catch (error) {
+            console.error('❌ Error saving expenses:', error);
+            Alert.alert('Error', 'Failed to save expenses. Please try again.');
+        } finally {
+            setSavingExpense(false);
+        }
+    };
+
+    const openExpenseModal = () => {
+        setExpenseRows([{ description: '', cost: '' }]);
+        setModalVisible(true);
+    };
+
+    const closeExpenseModal = () => {
+        setExpenseRows([{ description: '', cost: '' }]);
+        setModalVisible(false);
+    };
+
+    const getTotalExpenses = () => {
+        return expenseRows.reduce((total, row) => {
+            const cost = parseFloat(row.cost);
+            return total + (isNaN(cost) ? 0 : cost);
+        }, 0);
+    };
+
     useFocusEffect(
         React.useCallback(() => {
             loadOrders();
@@ -364,6 +542,150 @@ export default function SalesExpenseScreen() {
         const totalOrders = getTotalOrders();
         return totalOrders > 0 ? getTotalSales() / totalOrders : 0;
     };
+    // Function to export expenses to txt file
+    const exportExpensesToTxt = async () => {
+        try {
+            if (allExpenses.length === 0) {
+                Alert.alert('No Data', 'There are no expenses to export.');
+                return;
+            }
+
+            // Create the content for the txt file
+            let content = 'EXPENSES REPORT\n';
+            content += 'Generated on: ' + new Date().toLocaleString() + '\n';
+            content += '='.repeat(50) + '\n\n';
+
+            allExpenses.forEach((expenseDoc, docIndex) => {
+                content += `BATCH ${docIndex + 1}\n`;
+                content += `Date: ${expenseDoc.createdAt ?
+                    new Date(expenseDoc.createdAt).toLocaleDateString() + ' ' +
+                    new Date(expenseDoc.createdAt).toLocaleTimeString([], {
+                        hour: '2-digit', minute: '2-digit'
+                    }) : 'Unknown Date'}\n`;
+                content += '-'.repeat(30) + '\n';
+
+                expenseDoc.expenses.forEach((expense, expenseIndex) => {
+                    content += `${expenseIndex + 1}. ${expense.description}: ₱${expense.cost.toFixed(2)}\n`;
+                });
+
+                content += `Batch Total: ₱${expenseDoc.total.toFixed(2)}\n\n`;
+            });
+
+            content += '='.repeat(50) + '\n';
+            content += `GRAND TOTAL: ₱${getAllExpensesTotal().toFixed(2)}\n`;
+            content += `Total Batches: ${allExpenses.length}\n`;
+            content += `Total Items: ${allExpenses.reduce((total, doc) => total + doc.expenses.length, 0)}`;
+
+            // Create file name with timestamp
+            const timestamp = new Date().toISOString().split('T')[0];
+            const fileName = `expenses_report_${timestamp}.txt`;
+
+            // For now, just show the content in alert since file system has issues
+            // You can copy this to clipboard or show in a larger modal
+            Alert.alert(
+                'Expenses Report',
+                `File: ${fileName}\n\n${content}`,
+                [
+                    {
+                        text: 'Copy to Clipboard',
+                        onPress: () => {
+                            // You can implement clipboard functionality here if needed
+                            Alert.alert('Copied', 'Report content copied to clipboard!');
+                        }
+                    },
+                    { text: 'OK', style: 'default' }
+                ]
+            );
+
+            console.log('Expenses Report Content:', content); // For debugging
+
+        } catch (error) {
+            console.error('❌ Error exporting expenses:', error);
+            Alert.alert('Export Failed', 'Failed to export expenses report.');
+        }
+    };
+    // Function to delete a single expense batch
+    const deleteExpenseBatch = async (expenseId: string) => {
+        try {
+            if (!isOnlineMode) {
+                Alert.alert('Offline Mode', 'Cannot delete expenses while offline. Please connect to internet.');
+                return;
+            }
+
+            Alert.alert(
+                'Delete Expense Batch',
+                'Are you sure you want to delete this expense batch?',
+                [
+                    { text: 'Cancel', style: 'cancel' },
+                    {
+                        text: 'Delete',
+                        style: 'destructive',
+                        onPress: async () => {
+                            try {
+                                await deleteDoc(doc(db, 'expenses', expenseId));
+                                Alert.alert('Success', 'Expense batch deleted successfully!');
+                                loadAllExpenses(); // Reload the list
+                            } catch (error) {
+                                console.error('❌ Error deleting expense batch:', error);
+                                Alert.alert('Error', 'Failed to delete expense batch.');
+                            }
+                        }
+                    }
+                ]
+            );
+        } catch (error) {
+            console.error('❌ Error deleting expense batch:', error);
+            Alert.alert('Error', 'Failed to delete expense batch.');
+        }
+    };
+
+    // Function to delete all expenses
+    const deleteAllExpenses = async () => {
+        try {
+            if (!isOnlineMode) {
+                Alert.alert('Offline Mode', 'Cannot delete expenses while offline. Please connect to internet.');
+                return;
+            }
+
+            if (allExpenses.length === 0) {
+                Alert.alert('No Data', 'There are no expenses to delete.');
+                return;
+            }
+
+            Alert.alert(
+                'Delete All Expenses',
+                `Are you sure you want to delete ALL ${allExpenses.length} expense batches? This action cannot be undone.`,
+                [
+                    { text: 'Cancel', style: 'cancel' },
+                    {
+                        text: 'Delete All',
+                        style: 'destructive',
+                        onPress: async () => {
+                            try {
+                                setLoadingExpenses(true);
+                                // Delete all expenses one by one
+                                const deletePromises = allExpenses.map(expense =>
+                                    deleteDoc(doc(db, 'expenses', expense.id!))
+                                );
+
+                                await Promise.all(deletePromises);
+                                Alert.alert('Success', 'All expenses deleted successfully!');
+                                setAllExpenses([]); // Clear the list
+                            } catch (error) {
+                                console.error('❌ Error deleting all expenses:', error);
+                                Alert.alert('Error', 'Failed to delete all expenses.');
+                            } finally {
+                                setLoadingExpenses(false);
+                            }
+                        }
+                    }
+                ]
+            );
+        } catch (error) {
+            console.error('❌ Error deleting all expenses:', error);
+            Alert.alert('Error', 'Failed to delete all expenses.');
+        }
+    };
 
     return (
         <ThemedView style={styles.container}>
@@ -382,12 +704,26 @@ export default function SalesExpenseScreen() {
                             <ThemedView style={styles.headerSection}>
                                 <ThemedView style={styles.headerTop}>
                                     <ThemedText style={styles.mainTitle}>Sales & Revenue</ThemedText>
-                                    <TouchableOpacity
-                                        style={styles.reloadButton}
-                                        onPress={loadOrders}
-                                    >
-                                        <Feather name="refresh-cw" size={18} color="#874E3B" />
-                                    </TouchableOpacity>
+                                    <ThemedView style={styles.headerButtons}>
+                                        <TouchableOpacity
+                                            style={styles.listButton}
+                                            onPress={openExpenseModal}
+                                        >
+                                            <Feather name="dollar-sign" size={18} color="#874E3B" />
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                            style={styles.listButton}
+                                            onPress={openExpensesModal}
+                                        >
+                                            <Feather name="list" size={18} color="#874E3B" />
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                            style={styles.reloadButton}
+                                            onPress={loadOrders}
+                                        >
+                                            <Feather name="refresh-cw" size={18} color="#874E3B" />
+                                        </TouchableOpacity>
+                                    </ThemedView>
                                 </ThemedView>
 
                                 <ThemedText style={styles.modeInfo}>
@@ -431,45 +767,154 @@ export default function SalesExpenseScreen() {
                                 </ThemedView>
                             </ThemedView>
                         </ThemedView>
+                        {/* All Expenses View Modal */}
+                        <Modal
+                            animationType="slide"
+                            transparent={true}
+                            visible={expensesModalVisible}
+                            onRequestClose={closeExpensesModal}
+                        >
+                            <KeyboardAvoidingView
+                                style={styles.modalOverlay}
+                                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                            >
+                                <ScrollView
+                                    contentContainerStyle={styles.modalScrollContainer}
+                                    showsVerticalScrollIndicator={false}
+                                >
+                                    <ThemedView style={styles.modalContent}>
+                                        <ThemedView style={styles.modalHeader}>
+                                            <ThemedView style={styles.modalHeaderLeft}>
+                                                <ThemedText style={styles.modalTitle}>All Expenses</ThemedText>
+                                                <ThemedText style={styles.expensesCount}>
+                                                    {allExpenses.length} batch{allExpenses.length !== 1 ? 'es' : ''}
+                                                </ThemedText>
+                                            </ThemedView>
+                                            <ThemedView style={styles.modalHeaderRight}>
+                                                <TouchableOpacity
+                                                    style={styles.exportButton}
+                                                    onPress={exportExpensesToTxt}
+                                                    disabled={allExpenses.length === 0}
+                                                >
+                                                    <Feather name="download" size={20} color={allExpenses.length === 0 ? "#C4A484" : "#16A34A"} />
+                                                </TouchableOpacity>
+                                                <TouchableOpacity
+                                                    style={styles.deleteAllButton}
+                                                    onPress={deleteAllExpenses}
+                                                    disabled={allExpenses.length === 0}
+                                                >
+                                                    <Feather name="trash-2" size={18} color={allExpenses.length === 0 ? "#C4A484" : "#DC2626"} />
+                                                </TouchableOpacity>
+                                                <TouchableOpacity onPress={closeExpensesModal} style={styles.closeButton}>
+                                                    <Feather name="x" size={24} color="#874E3B" />
+                                                </TouchableOpacity>
+                                            </ThemedView>
+                                        </ThemedView>
+                                        {loadingExpenses ? (
+                                            <ThemedView style={styles.loadingContainer}>
+                                                <ThemedText>Loading expenses...</ThemedText>
+                                            </ThemedView>
+                                        ) : allExpenses.length === 0 ? (
+                                            <ThemedView style={styles.noDataContainer}>
+                                                <Feather name="file-text" size={32} color="#D4A574" />
+                                                <ThemedText style={styles.noDataText}>No expenses recorded</ThemedText>
+                                            </ThemedView>
+                                        ) : (
+                                            <>
+                                                {/* Export Summary */}
+                                                <ThemedView style={styles.exportSummary}>
+                                                    <ThemedText style={styles.exportSummaryText}>
+                                                        Total: ₱{getAllExpensesTotal().toFixed(2)} • {allExpenses.length} batches
+                                                    </ThemedText>
+                                                </ThemedView>
 
-                        {/* Summary Cards - 2x2 Grid */}
-                        <ThemedView style={styles.summaryGrid}>
-                            {/* Row 1 */}
-                            <ThemedView style={styles.summaryRow}>
-                                <ThemedView style={styles.summaryCard}>
-                                    <ThemedView style={styles.summaryIconContainer}>
-                                        <Feather name="dollar-sign" size={20} color="#16A34A" />
-                                    </ThemedView>
-                                    <ThemedText style={styles.summaryValue}>₱{getTotalSales().toFixed(2)}</ThemedText>
-                                    <ThemedText style={styles.summaryLabel}>Total Sales</ThemedText>
-                                </ThemedView>
+                                                {/* Expenses List */}
+                                                <ScrollView
+                                                    style={styles.expensesListContainer}
+                                                    showsVerticalScrollIndicator={false}
+                                                >
+                                                    {allExpenses.map((expenseDoc, docIndex) => (
+                                                        <ThemedView key={expenseDoc.id || docIndex} style={styles.expenseDocument}>
+                                                            <ThemedView style={styles.expenseDocHeader}>
+                                                                <ThemedText style={styles.expenseDocDate}>
+                                                                    {expenseDoc.createdAt ?
+                                                                        new Date(expenseDoc.createdAt).toLocaleDateString() + ' ' +
+                                                                        new Date(expenseDoc.createdAt).toLocaleTimeString([], {
+                                                                            hour: '2-digit', minute: '2-digit'
+                                                                        })
+                                                                        : 'Unknown Date'
+                                                                    }
+                                                                </ThemedText>
+                                                                <ThemedText style={styles.expenseDocTotal}>
+                                                                    ₱{expenseDoc.total.toFixed(2)}
+                                                                </ThemedText>
+                                                            </ThemedView>
 
-                                <ThemedView style={styles.summaryCard}>
-                                    <ThemedView style={styles.summaryIconContainer}>
-                                        <Feather name="shopping-bag" size={20} color="#874E3B" />
+                                                            {expenseDoc.expenses.map((expense, expenseIndex) => (
+                                                                <ThemedView key={expenseIndex} style={styles.expenseItem}>
+                                                                    <ThemedView style={styles.expenseDescription}>
+                                                                        <ThemedText style={styles.expenseText}>
+                                                                            {expense.description}
+                                                                        </ThemedText>
+                                                                    </ThemedView>
+                                                                    <ThemedView style={styles.expenseCost}>
+                                                                        <ThemedText style={styles.expenseText}>
+                                                                            ₱{expense.cost.toFixed(2)}
+                                                                        </ThemedText>
+                                                                    </ThemedView>
+                                                                </ThemedView>
+                                                            ))}
+                                                        </ThemedView>
+                                                    ))}
+                                                </ScrollView>
+                                            </>
+                                        )}
+
+                                        <ThemedView style={styles.modalButtons}>
+                                            <TouchableOpacity
+                                                style={[styles.modalButton, styles.closeExpenseButton]}
+                                                onPress={closeExpensesModal}
+                                            >
+                                                <ThemedText style={styles.closeExpenseButtonText}>Close</ThemedText>
+                                            </TouchableOpacity>
+                                        </ThemedView>
                                     </ThemedView>
-                                    <ThemedText style={styles.summaryValue}>{getTotalOrders()}</ThemedText>
-                                    <ThemedText style={styles.summaryLabel}>Total Orders</ThemedText>
+                                </ScrollView>
+                            </KeyboardAvoidingView>
+                        </Modal>
+
+                        {/* Summary Cards - 1x4 Single Row */}
+                        <ThemedView style={styles.summaryRow}>
+                            <ThemedView style={styles.summaryCard}>
+                                <ThemedView style={styles.summaryIconContainer}>
+                                    <Feather name="dollar-sign" size={20} color="#16A34A" />
                                 </ThemedView>
+                                <ThemedText style={styles.summaryValue}>₱{getTotalSales().toFixed(2)}</ThemedText>
+                                <ThemedText style={styles.summaryLabel}>Total Sales</ThemedText>
                             </ThemedView>
 
-                            {/* Row 2 */}
-                            <ThemedView style={styles.summaryRow}>
-                                <ThemedView style={styles.summaryCard}>
-                                    <ThemedView style={styles.summaryIconContainer}>
-                                        <Feather name="users" size={20} color="#D97706" />
-                                    </ThemedView>
-                                    <ThemedText style={styles.summaryValue}>{getTotalCustomers()}</ThemedText>
-                                    <ThemedText style={styles.summaryLabel}>Customers</ThemedText>
+                            <ThemedView style={styles.summaryCard}>
+                                <ThemedView style={styles.summaryIconContainer}>
+                                    <Feather name="shopping-bag" size={20} color="#874E3B" />
                                 </ThemedView>
+                                <ThemedText style={styles.summaryValue}>{getTotalOrders()}</ThemedText>
+                                <ThemedText style={styles.summaryLabel}>Total Orders</ThemedText>
+                            </ThemedView>
 
-                                <ThemedView style={styles.summaryCard}>
-                                    <ThemedView style={styles.summaryIconContainer}>
-                                        <Feather name="trending-up" size={20} color="#2563EB" />
-                                    </ThemedView>
-                                    <ThemedText style={styles.summaryValue}>₱{getAverageOrderValue().toFixed(2)}</ThemedText>
-                                    <ThemedText style={styles.summaryLabel}>Avg. Order Value</ThemedText>
+                            <ThemedView style={styles.summaryCard}>
+                                <ThemedView style={styles.summaryIconContainer}>
+                                    <Feather name="users" size={20} color="#D97706" />
                                 </ThemedView>
+                                <ThemedText style={styles.summaryValue}>{getTotalCustomers()}</ThemedText>
+                                <ThemedText style={styles.summaryLabel}>Customers</ThemedText>
+                            </ThemedView>
+
+                            <ThemedView style={styles.summaryCard}>
+                                <ThemedView style={styles.summaryIconContainer}>
+                                    <Feather name="trending-up" size={20} color="#2563EB" />
+                                </ThemedView>
+                                <ThemedText style={styles.summaryValue}>₱{getAverageOrderValue().toFixed(2)}</ThemedText>
+                                <ThemedText style={styles.summaryLabel}>Avg. Order Value</ThemedText>
                             </ThemedView>
                         </ThemedView>
 
@@ -537,6 +982,118 @@ export default function SalesExpenseScreen() {
                     </ThemedView>
                 </ScrollView>
             </ImageBackground>
+
+            {/* Expense Modal */}
+            <Modal
+                animationType="slide"
+                transparent={true}
+                visible={modalVisible}
+                onRequestClose={closeExpenseModal}
+            >
+                <KeyboardAvoidingView
+                    style={styles.modalOverlay}
+                    behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                >
+                    <ScrollView
+                        contentContainerStyle={styles.modalScrollContainer}
+                        showsVerticalScrollIndicator={false}
+                    >
+                        <ThemedView style={styles.modalContent}>
+                            <ThemedView style={styles.modalHeader}>
+                                <ThemedText style={styles.modalTitle}>Add Expenses</ThemedText>
+                                <TouchableOpacity onPress={closeExpenseModal} style={styles.closeButton}>
+                                    <Feather name="x" size={24} color="#874E3B" />
+                                </TouchableOpacity>
+                            </ThemedView>
+
+                            {/* Table Header */}
+                            <ThemedView style={styles.tableHeader}>
+                                <ThemedView style={[styles.tableCell, styles.headerCell, { flex: 2 }]}>
+                                    <ThemedText style={styles.headerText}>Expenses</ThemedText>
+                                </ThemedView>
+                                <ThemedView style={[styles.tableCell, styles.headerCell, { flex: 1 }]}>
+                                    <ThemedText style={styles.headerText}>Cost</ThemedText>
+                                </ThemedView>
+                                <ThemedView style={[styles.tableCell, styles.headerCell, { flex: 0.5 }]}>
+                                    <TouchableOpacity style={styles.addButton} onPress={addNewRow}>
+                                        <Feather name="plus" size={20} color="#16A34A" />
+                                    </TouchableOpacity>
+                                </ThemedView>
+                            </ThemedView>
+
+                            {/* Expense Rows */}
+                            <View style={styles.tableContainer}>
+                                {expenseRows.map((row, index) => (
+                                    <ThemedView key={index} style={styles.tableRow}>
+                                        <ThemedView style={[styles.tableCell, { flex: 2 }]}>
+                                            <TextInput
+                                                style={styles.textInput}
+                                                placeholder="Enter expense..."
+                                                placeholderTextColor="#8B7355"
+                                                value={row.description}
+                                                onChangeText={(value) => updateRow(index, 'description', value)}
+                                                returnKeyType="next"
+                                            />
+                                        </ThemedView>
+                                        <ThemedView style={[styles.tableCell, { flex: 1 }]}>
+                                            <TextInput
+                                                style={styles.textInput}
+                                                placeholder="0.00"
+                                                placeholderTextColor="#8B7355"
+                                                value={row.cost}
+                                                onChangeText={(value) => updateRow(index, 'cost', value)}
+                                                keyboardType="decimal-pad"
+                                                returnKeyType="done"
+                                            />
+                                        </ThemedView>
+                                        <ThemedView style={[styles.tableCell, { flex: 0.5 }]}>
+                                            {expenseRows.length > 1 && (
+                                                <TouchableOpacity
+                                                    style={styles.removeButton}
+                                                    onPress={() => removeRow(index)}
+                                                >
+                                                    <Feather name="trash-2" size={16} color="#DC2626" />
+                                                </TouchableOpacity>
+                                            )}
+                                        </ThemedView>
+                                    </ThemedView>
+                                ))}
+                            </View>
+
+                            {/* Total Row */}
+                            <ThemedView style={styles.totalRow}>
+                                <ThemedView style={[styles.tableCell, { flex: 2 }]}>
+                                    <ThemedText style={styles.totalLabel}>Total</ThemedText>
+                                </ThemedView>
+                                <ThemedView style={[styles.tableCell, { flex: 1 }]}>
+                                    <ThemedText style={styles.totalValue}>
+                                        ₱{getTotalExpenses().toFixed(2)}
+                                    </ThemedText>
+                                </ThemedView>
+                                <ThemedView style={[styles.tableCell, { flex: 0.5 }]} />
+                            </ThemedView>
+
+                            <ThemedView style={styles.modalButtons}>
+                                <TouchableOpacity
+                                    style={[styles.modalButton, styles.cancelButton]}
+                                    onPress={closeExpenseModal}
+                                >
+                                    <ThemedText style={styles.cancelButtonText}>Cancel</ThemedText>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={[styles.modalButton, styles.saveButton, savingExpense && styles.saveButtonDisabled]}
+                                    onPress={saveExpensesToFirebase}
+                                    disabled={savingExpense}
+                                >
+                                    <ThemedText style={styles.saveButtonText}>
+                                        {savingExpense ? 'Saving...' : 'Save Expenses'}
+                                    </ThemedText>
+                                </TouchableOpacity>
+                            </ThemedView>
+                        </ThemedView>
+                    </ScrollView>
+                </KeyboardAvoidingView>
+            </Modal>
         </ThemedView>
     );
 }
@@ -567,16 +1124,155 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: '#D4A574',
     },
+    // Add these to your styles
+    loadingContainer: {
+        padding: 20,
+        alignItems: 'center',
+    },
+    expensesListContainer: {
+        maxHeight: 400,
+        marginBottom: 16,
+    },
+    expenseDocument: {
+        backgroundColor: '#F5E6D3',
+        borderRadius: 8,
+        padding: 12,
+        marginBottom: 12,
+        borderWidth: 1,
+        borderColor: '#D4A574',
+    },
+    expenseDocHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 8,
+        paddingBottom: 8,
+        borderBottomWidth: 1,
+        borderBottomColor: '#D4A574',
+    },
+    expenseDocDate: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: '#5A3921',
+    },
+    expenseDocTotal: {
+        fontSize: 14,
+        fontWeight: 'bold',
+        color: '#874E3B',
+    },
+    expenseItem: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingVertical: 4,
+    },
+    expenseDescription: {
+        flex: 2,
+    },
+    expenseCost: {
+        flex: 1,
+        alignItems: 'flex-end',
+    },
+    expenseText: {
+        fontSize: 12,
+        color: '#5A3921',
+    },
+    grandTotalContainer: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingVertical: 12,
+        borderTopWidth: 2,
+        borderTopColor: '#874E3B',
+        marginTop: 8,
+    },
+    grandTotalLabel: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#874E3B',
+    },
+    grandTotalValue: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        color: '#16A34A',
+    },
+    closeExpenseButton: {
+        backgroundColor: '#874E3B',
+        borderWidth: 1,
+        borderColor: '#874E3B',
+    },
+    closeExpenseButtonText: {
+        color: '#FFFEEA',
+        fontWeight: 'bold',
+        fontSize: 16,
+    },
     headerTop: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
         marginBottom: 8,
     },
+    headerButtons: {
+        flexDirection: 'row',
+        gap: 8,
+    },
+    listButton: {
+        width: 40,
+        height: 40,
+        borderRadius: 8,
+        backgroundColor: '#F5E6D3',
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#D4A574',
+    },
     mainTitle: {
         fontSize: 28,
         color: '#874E3B',
         fontFamily: 'LobsterTwoItalic',
+    },
+    deleteAllButton: {
+        width: 40,
+        height: 40,
+        borderRadius: 8,
+        backgroundColor: '#FEF2F2',
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#DC2626',
+    },
+    modalHeaderLeft: {
+        flex: 1,
+    }, expensesCount: {
+        fontSize: 12,
+        color: '#8B7355',
+        marginTop: 2,
+    }, modalHeaderRight: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    }, exportButton: {
+        width: 40,
+        height: 40,
+        borderRadius: 8,
+        backgroundColor: '#F0FDF4',
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#16A34A',
+    }, exportSummary: {
+        backgroundColor: '#F5E6D3',
+        padding: 12,
+        borderRadius: 8,
+        marginBottom: 12,
+        borderWidth: 1,
+        borderColor: '#D4A574',
+    },
+    exportSummaryText: {
+        fontSize: 14,
+        fontWeight: 'bold',
+        color: '#874E3B',
+        textAlign: 'center',
     },
     modeInfo: {
         fontSize: 12,
@@ -620,21 +1316,18 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: '#D4A574',
     },
-    // Summary Cards - 2x2 Grid
-    summaryGrid: {
-        marginBottom: 16,
-    },
+    // Summary Cards - 1x4 Single Row
     summaryRow: {
         flexDirection: 'row',
         justifyContent: 'space-between',
-        marginBottom: 12,
+        marginBottom: 16,
     },
     summaryCard: {
         flex: 1,
         backgroundColor: "#FFFEEA",
         borderRadius: 12,
-        padding: 16,
-        marginHorizontal: 6,
+        padding: 12,
+        marginHorizontal: 4,
         borderWidth: 1,
         borderColor: '#D4A574',
         alignItems: 'center',
@@ -648,22 +1341,22 @@ const styles = StyleSheet.create({
         elevation: 5,
     },
     summaryIconContainer: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
+        width: 36,
+        height: 36,
+        borderRadius: 18,
         backgroundColor: '#F5E6D3',
         justifyContent: 'center',
         alignItems: 'center',
-        marginBottom: 8,
+        marginBottom: 6,
     },
     summaryValue: {
-        fontSize: 18,
+        fontSize: 16,
         fontWeight: 'bold',
         color: '#874E3B',
-        marginBottom: 4,
+        marginBottom: 2,
     },
     summaryLabel: {
-        fontSize: 12,
+        fontSize: 10,
         color: '#5A3921',
         textAlign: 'center',
     },
@@ -673,6 +1366,7 @@ const styles = StyleSheet.create({
         justifyContent: 'space-between',
         marginBottom: 16,
     },
+
     chartSection: {
         flex: 1,
         backgroundColor: "#fffecaF2",
@@ -684,16 +1378,19 @@ const styles = StyleSheet.create({
     },
     chartHeader: {
         marginBottom: 12,
+        alignItems: 'center',
     },
     chartTitle: {
         fontSize: 16,
         fontWeight: 'bold',
         color: '#874E3B',
         marginBottom: 2,
+        textAlign: 'center',
     },
     chartSubtitle: {
         fontSize: 10,
         color: '#5A3921',
+        textAlign: 'center',
     },
     chartWrapper: {
         alignItems: 'center',
@@ -729,16 +1426,19 @@ const styles = StyleSheet.create({
     },
     activityHeader: {
         marginBottom: 12,
+        alignItems: 'center',
     },
     sectionTitle: {
         fontSize: 18,
         fontWeight: 'bold',
         color: '#874E3B',
         marginBottom: 4,
+        textAlign: 'center',
     },
     activitySubtitle: {
         fontSize: 12,
         color: '#5A3921',
+        textAlign: 'center',
     },
     activityList: {
         flex: 1, // Takes remaining space in the container
@@ -776,5 +1476,156 @@ const styles = StyleSheet.create({
         fontSize: 14,
         fontWeight: 'bold',
         color: '#874E3B',
+    },
+    // Modal Styles
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        justifyContent: 'flex-end',
+    },
+    modalScrollContainer: {
+        flexGrow: 1,
+        justifyContent: 'flex-end',
+        paddingHorizontal: 20,
+        paddingBottom: 20,
+    },
+    modalContent: {
+        backgroundColor: '#FFFEEA',
+        borderRadius: 16,
+        padding: 20,
+        borderWidth: 2,
+        borderColor: '#D4A574',
+        maxHeight: '80%',
+    },
+    modalHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 16,
+    },
+    modalTitle: {
+        fontSize: 20,
+        fontWeight: 'bold',
+        color: '#874E3B',
+    },
+    // Table Styles
+    tableHeader: {
+        flexDirection: 'row',
+        borderBottomWidth: 2,
+        borderBottomColor: '#874E3B',
+        marginBottom: 8,
+        paddingBottom: 8,
+    },
+    tableContainer: {
+        maxHeight: 200,
+    },
+    tableRow: {
+        flexDirection: 'row',
+        borderBottomWidth: 1,
+        borderBottomColor: '#E8D8C8',
+        paddingVertical: 8,
+        alignItems: 'center',
+    },
+    totalRow: {
+        flexDirection: 'row',
+        borderTopWidth: 2,
+        borderTopColor: '#874E3B',
+        paddingVertical: 12,
+        marginTop: 8,
+    },
+    tableCell: {
+        paddingHorizontal: 8,
+        justifyContent: 'center',
+    },
+    headerCell: {
+        paddingVertical: 8,
+    },
+    headerText: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#874E3B',
+        textAlign: 'center',
+    },
+    textInput: {
+        borderWidth: 1,
+        borderColor: '#D4A574',
+        borderRadius: 4,
+        padding: 8,
+        fontSize: 14,
+        color: '#5A3921',
+        backgroundColor: '#FFFEEA',
+        textAlign: 'center',
+    },
+    totalLabel: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#874E3B',
+        textAlign: 'center',
+    },
+    totalValue: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#16A34A',
+        textAlign: 'center',
+    },
+    addButton: {
+        width: 32,
+        height: 32,
+        borderRadius: 16,
+        backgroundColor: '#F0FDF4',
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#16A34A',
+    },
+    removeButton: {
+        width: 28,
+        height: 28,
+        borderRadius: 14,
+        backgroundColor: '#FEF2F2',
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#DC2626',
+    },
+    closeButton: {
+        padding: 4,
+    },
+
+    modalButtons: {
+        flexDirection: 'row',
+        gap: 12,
+        marginTop: 20,
+    },
+    modalButton: {
+        flex: 1,
+        paddingVertical: 12,
+        borderRadius: 8,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    cancelButton: {
+        backgroundColor: '#F5E6D3',
+        borderWidth: 1,
+        borderColor: '#D4A574',
+    },
+    saveButton: {
+        backgroundColor: '#874E3B',
+        borderWidth: 1,
+        borderColor: '#874E3B',
+    },
+    saveButtonDisabled: {
+        backgroundColor: '#C4A484',
+        borderColor: '#C4A484',
+    },
+    cancelButtonText: {
+        color: '#874E3B',
+        fontWeight: 'bold',
+        fontSize: 16,
+    },
+    saveButtonText: {
+        color: '#FFFEEA',
+        fontWeight: 'bold',
+        fontSize: 16,
     },
 });

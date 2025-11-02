@@ -261,9 +261,7 @@ export default function OrderStatusScreen() {
                             <ThemedText style={styles.modeInfo}>
                                 {isOnlineMode ? '🔥 Connected to Firebase - Showing online data' : '📱 Using local storage - Showing local data'}
                             </ThemedText>
-                            <ThemedText style={styles.subtitle}>
-                                Showing unpaid orders only
-                            </ThemedText>
+
                         </ThemedView>
                     </ThemedView>
 
@@ -298,9 +296,9 @@ export default function OrderStatusScreen() {
                                             <ThemedText style={styles.orderId}>
                                                 #{order.orderId.slice(-4)}
                                             </ThemedText>
-                                            <ThemedView style={[styles.statusBadge, { backgroundColor: getStatusColor(order.status) }]}>
+                                            <ThemedView style={[styles.statusBadge, { backgroundColor: 'green' }]}>
                                                 <ThemedText style={styles.statusText}>
-                                                    {order.status.toUpperCase()}
+                                                    PAID
                                                 </ThemedText>
                                             </ThemedView>
                                         </ThemedView>
@@ -410,15 +408,7 @@ export default function OrderStatusScreen() {
                                             onPress={() => selectedOrder && updateOrderStatus(selectedOrder.orderId, 'paid')}
                                         >
                                             <Feather name="check-circle" size={20} color="#FFFEEA" />
-                                            <ThemedText style={styles.actionButtonTextModal}>MARK AS PAID</ThemedText>
-                                        </TouchableOpacity>
-
-                                        <TouchableOpacity
-                                            style={[styles.actionButtonModal, styles.cancelButton]}
-                                            onPress={() => selectedOrder && updateOrderStatus(selectedOrder.orderId, 'cancelled')}
-                                        >
-                                            <Feather name="x-circle" size={20} color="#FFFEEA" />
-                                            <ThemedText style={styles.actionButtonTextModal}>CANCEL ORDER</ThemedText>
+                                            <ThemedText style={styles.actionButtonTextModal}>DONE</ThemedText>
                                         </TouchableOpacity>
                                     </ThemedView>
                                 </ThemedView>
@@ -519,31 +509,31 @@ const styles = StyleSheet.create({
         marginBottom: 6,
     },
     orderId: {
-        fontSize: 12,
+        fontSize: 15,
         fontWeight: 'bold',
         color: '#874E3B',
         fontFamily: 'LobsterTwoRegular',
         flex: 1,
     },
     statusBadge: {
-        paddingHorizontal: 6,
+        paddingHorizontal: 10,
         paddingVertical: 2,
         borderRadius: 6,
         marginLeft: 4,
     },
     statusText: {
         color: '#FFFEEA',
-        fontSize: 8,
+        fontSize: 10,
         fontWeight: 'bold',
     },
     customerName: {
-        fontSize: 10,
+        fontSize: 20,
         fontWeight: '600',
         color: '#5A3921',
         marginBottom: 2,
     },
     orderTime: {
-        fontSize: 9,
+        fontSize: 15,
         color: '#8B7355',
         marginBottom: 6,
         fontStyle: 'italic',
@@ -577,12 +567,12 @@ const styles = StyleSheet.create({
         borderTopColor: '#E8D8C8',
     },
     totalLabel: {
-        fontSize: 8,
+        fontSize: 15,
         color: '#5A3921',
         fontWeight: '600',
     },
     orderTotal: {
-        fontSize: 10,
+        fontSize: 15,
         fontWeight: 'bold',
         color: '#874E3B',
     },

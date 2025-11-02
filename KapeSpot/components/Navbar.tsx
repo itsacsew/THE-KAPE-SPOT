@@ -404,6 +404,24 @@ export default function Navbar({ activeNav }: NavbarProps) {
                     </ThemedText>
                     {currentActiveNav === 'pos' && <ThemedView style={styles.activeIndicator} />}
                 </TouchableOpacity>
+                <TouchableOpacity
+                    style={styles.navLink}
+                    onPress={() => navigateTo('/orderStatus', 'order-status')}
+                >
+                    <Feather
+                        name="clipboard"
+                        size={20}
+                        color={currentActiveNav === 'order-status' ? '#FFFEEA' : '#FFFEEA'}
+                        style={styles.navIcon}
+                    />
+                    <ThemedText style={[
+                        styles.navLinkText,
+                        currentActiveNav === 'order-status' && styles.activeNavLinkText
+                    ]}>
+                        Order
+                    </ThemedText>
+                    {currentActiveNav === 'order-status' && <ThemedView style={styles.activeIndicator} />}
+                </TouchableOpacity>
 
                 <TouchableOpacity
                     style={styles.navLink}
@@ -419,7 +437,7 @@ export default function Navbar({ activeNav }: NavbarProps) {
                         styles.navLinkText,
                         currentActiveNav === 'items' && styles.activeNavLinkText
                     ]}>
-                        Items
+                        Inventory
                     </ThemedText>
                     {currentActiveNav === 'items' && <ThemedView style={styles.activeIndicator} />}
                 </TouchableOpacity>
@@ -462,24 +480,7 @@ export default function Navbar({ activeNav }: NavbarProps) {
                     {currentActiveNav === 'sales' && <ThemedView style={styles.activeIndicator} />}
                 </TouchableOpacity>
 
-                <TouchableOpacity
-                    style={styles.navLink}
-                    onPress={() => navigateTo('/orderStatus', 'order-status')}
-                >
-                    <Feather
-                        name="clipboard"
-                        size={20}
-                        color={currentActiveNav === 'order-status' ? '#FFFEEA' : '#FFFEEA'}
-                        style={styles.navIcon}
-                    />
-                    <ThemedText style={[
-                        styles.navLinkText,
-                        currentActiveNav === 'order-status' && styles.activeNavLinkText
-                    ]}>
-                        Order Status
-                    </ThemedText>
-                    {currentActiveNav === 'order-status' && <ThemedView style={styles.activeIndicator} />}
-                </TouchableOpacity>
+
 
                 {/* Sync Indicator */}
                 <TouchableOpacity

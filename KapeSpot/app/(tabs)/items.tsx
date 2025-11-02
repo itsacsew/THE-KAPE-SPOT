@@ -61,11 +61,19 @@ interface CupItem {
 
 interface PendingItem {
     id: string;
-    type: 'CREATE_ITEM' | 'UPDATE_ITEM' | 'DELETE_ITEM' | 'CREATE_CATEGORY' | 'UPDATE_CATEGORY' | 'DELETE_CATEGORY';
+    type: 'CREATE_ITEM' | 'UPDATE_ITEM' | 'DELETE_ITEM' | 'CREATE_CATEGORY' | 'UPDATE_CATEGORY' | 'DELETE_CATEGORY' | 'CREATE_CUP' | 'UPDATE_CUP' | 'DELETE_CUP';
     data: any;
     timestamp: number;
     retryCount: number;
     serverId?: string;
+}
+
+interface User {
+    id: string;
+    username: string;
+    role: 'user' | 'admin';
+    name: string;
+    firebaseUID?: string;
 }
 
 export default function ItemsScreen() {
@@ -79,6 +87,8 @@ export default function ItemsScreen() {
     const [cupsLoading, setCupsLoading] = useState(false);
     const [categoriesLoading, setCategoriesLoading] = useState(false);
     const [isOnlineMode, setIsOnlineMode] = useState<boolean>(false);
+    const [currentUser, setCurrentUser] = useState<User | null>(null);
+    const [userRole, setUserRole] = useState<'user' | 'admin'>('user');
 
     // Modal states
     const [editStocksModal, setEditStocksModal] = useState(false);
@@ -97,8 +107,38 @@ export default function ItemsScreen() {
     const [editItemStocks, setEditItemStocks] = useState('');
     const [editItemPrice, setEditItemPrice] = useState('');
 
+    // Cup Modal states
+    const [cupModalVisible, setCupModalVisible] = useState(false);
+    const [editingCup, setEditingCup] = useState<CupItem | null>(null);
+    const [cupName, setCupName] = useState('');
+    const [cupSize, setCupSize] = useState('');
+    const [cupStocks, setCupStocks] = useState('');
+
     const itemsPerPage = 10;
     const db = getFirestore(app);
+
+    // Load current user data
+    useEffect(() => {
+        const loadCurrentUser = async () => {
+            try {
+                const syncService = OfflineSyncService.getInstance();
+                const userData = await syncService.getItem('currentUser');
+                if (userData) {
+                    const user = JSON.parse(userData);
+                    setCurrentUser(user);
+                    setUserRole(user.role || 'user');
+                    console.log('👤 Current user role:', user.role);
+                }
+            } catch (error) {
+                console.error('Error loading user data:', error);
+            }
+        };
+
+        loadCurrentUser();
+    }, []);
+
+    // Check if user has admin privileges
+    const isAdmin = userRole === 'admin';
 
     // Function to get connection mode - IMPROVED VERSION
     const getConnectionMode = async (): Promise<'online' | 'offline'> => {
@@ -133,6 +173,8 @@ export default function ItemsScreen() {
     const availableIcons = ['folder', 'coffee', 'star', 'shopping-bag', 'package', 'heart', 'bookmark', 'tag'];
 
     // Load menu items from Firebase - SEPARATE LOGIC FOR ONLINE vs OFFLINE
+    // Load menu items from Firebase - FIXED DUPLICATE ISSUE
+    // Load menu items from Firebase - FIXED: Show only one source based on mode
     const loadMenuItems = async () => {
         setLoading(true);
         try {
@@ -146,7 +188,7 @@ export default function ItemsScreen() {
 
                 const items: MenuItem[] = offlineItems.map(item => ({
                     ...item,
-                    isOffline: true // Mark all as offline
+                    isOffline: true
                 }));
 
                 setMenuItems(items);
@@ -156,7 +198,7 @@ export default function ItemsScreen() {
 
             console.log('🔥 Fetching from FIREBASE (ONLINE MODE)...');
 
-            // ONLINE MODE: Fetch from Firebase Firestore
+            // ONLINE MODE: Fetch from Firebase Firestore ONLY
             const itemsCollection = collection(db, 'items');
             const itemsSnapshot = await getDocs(itemsCollection);
 
@@ -173,13 +215,15 @@ export default function ItemsScreen() {
                     status: data.status !== false,
                     description: data.description || '',
                     image: data.image || undefined,
-                    isOffline: false, // Mark as online
+                    isOffline: false,
                     firebaseId: doc.id
                 };
             });
 
+            // IMPORTANT: Clear local items when online to avoid duplicates
+            // Only show Firebase data when online
             setMenuItems(firebaseItems);
-            console.log('✅ Loaded FIREBASE items:', firebaseItems.length, 'items');
+            console.log('✅ Loaded FIREBASE items only:', firebaseItems.length, 'items');
 
         } catch (error) {
             console.error('❌ Error loading menu items:', error);
@@ -187,14 +231,40 @@ export default function ItemsScreen() {
             // Fallback to OFFLINE mode on error
             const syncService = OfflineSyncService.getInstance();
             const offlineItems = await syncService.getItems();
-            setMenuItems(offlineItems);
+
+            const items: MenuItem[] = offlineItems.map(item => ({
+                ...item,
+                isOffline: true
+            }));
+
+            setMenuItems(items);
             setIsOnlineMode(false);
+            console.log('🔄 Fallback to OFFLINE items:', items.length, 'items');
         } finally {
             setLoading(false);
         }
     };
 
+    // ADD THIS FUNCTION TO REMOVE DUPLICATES
+    const removeDuplicateItems = (items: MenuItem[]): MenuItem[] => {
+        const seen = new Set();
+
+        return items.filter(item => {
+            // Use combination of name and code as unique identifier
+            const identifier = `${item.name.toLowerCase()}-${item.code}`;
+
+            if (seen.has(identifier)) {
+                console.log('🔄 Removing duplicate:', identifier);
+                return false;
+            }
+
+            seen.add(identifier);
+            return true;
+        });
+    };
+
     // Load categories from Firebase
+    // Load categories from Firebase - FIXED: Show only one source based on mode
     const loadCategories = async () => {
         setCategoriesLoading(true);
         try {
@@ -233,7 +303,7 @@ export default function ItemsScreen() {
 
             console.log('🔥 [CATEGORY LOAD] Fetching categories from Firebase (ONLINE MODE)...');
 
-            // ONLINE MODE: Fetch from Firebase Firestore
+            // ONLINE MODE: Fetch from Firebase Firestore ONLY
             const categoriesCollection = collection(db, 'categories');
             const categoriesSnapshot = await getDocs(categoriesCollection);
 
@@ -250,8 +320,9 @@ export default function ItemsScreen() {
                 };
             });
 
+            // IMPORTANT: Only show Firebase data when online
             setCategories(firebaseCategories);
-            console.log('✅ [CATEGORY LOAD] Loaded FIREBASE categories:', firebaseCategories.length, 'categories');
+            console.log('✅ [CATEGORY LOAD] Loaded FIREBASE categories only:', firebaseCategories.length, 'categories');
 
         } catch (error) {
             console.error('❌ [CATEGORY LOAD] Error loading categories:', error);
@@ -286,8 +357,8 @@ export default function ItemsScreen() {
             console.log('🏁 [CATEGORY LOAD] Categories loading process completed');
         }
     };
-
     // Load cups data - FIREBASE + LOCAL STORAGE
+    // Load cups data - FIXED: Show only one source based on mode
     const loadCups = async () => {
         setCupsLoading(true);
         try {
@@ -305,9 +376,9 @@ export default function ItemsScreen() {
                 } else {
                     // Create initial cups in local storage
                     const initialCups: CupItem[] = [
-                        { id: '1', name: 'Small Cup', stocks: 100, size: '8oz' },
-                        { id: '2', name: 'Medium Cup', stocks: 80, size: '12oz' },
-                        { id: '3', name: 'Large Cup', stocks: 60, size: '16oz' },
+                        { id: '1', name: 'Small Cup', size: '8oz', stocks: 100, status: true, isOffline: true },
+                        { id: '2', name: 'Medium Cup', size: '12oz', stocks: 100, status: true, isOffline: true },
+                        { id: '3', name: 'Large Cup', size: '16oz', stocks: 100, status: true, isOffline: true },
                     ];
                     await syncService.saveCups(initialCups);
                     setCupItems(initialCups);
@@ -316,7 +387,7 @@ export default function ItemsScreen() {
                 return;
             }
 
-            // ONLINE MODE: Load from Firebase
+            // ONLINE MODE: Load from Firebase ONLY
             console.log('🔥 Loading cups from Firebase (ONLINE MODE)...');
             const cupsCollection = collection(db, 'cups');
             const cupsSnapshot = await getDocs(cupsCollection);
@@ -334,32 +405,9 @@ export default function ItemsScreen() {
                 };
             });
 
-            // If no cups in Firebase, create initial ones
-            if (firebaseCups.length === 0) {
-                console.log('📝 No cups found in Firebase, creating initial cups...');
-                const initialCups: CupItem[] = [
-                    { id: '1', name: 'Small Cup', stocks: 100, size: '8oz' },
-                    { id: '2', name: 'Medium Cup', stocks: 80, size: '12oz' },
-                    { id: '3', name: 'Large Cup', stocks: 60, size: '16oz' },
-                ];
-
-                // Save to Firebase
-                for (const cup of initialCups) {
-                    await addDoc(collection(db, 'cups'), {
-                        name: cup.name,
-                        size: cup.size,
-                        stocks: cup.stocks,
-                        status: true,
-                        created_at: new Date().toISOString()
-                    });
-                }
-
-                setCupItems(initialCups);
-                console.log('✅ Created initial cups in Firebase');
-            } else {
-                setCupItems(firebaseCups);
-                console.log('✅ Loaded FIREBASE cups:', firebaseCups.length, 'cups');
-            }
+            // IMPORTANT: Only show Firebase data when online
+            setCupItems(firebaseCups);
+            console.log('✅ Loaded FIREBASE cups only:', firebaseCups.length, 'cups');
 
         } catch (error) {
             console.error('❌ Error loading cups:', error);
@@ -373,9 +421,9 @@ export default function ItemsScreen() {
                 console.log('✅ Fallback: Loaded cups from local storage:', storedCups.length, 'cups');
             } else {
                 const initialCups: CupItem[] = [
-                    { id: '1', name: 'Small Cup', stocks: 100, size: '8oz' },
-                    { id: '2', name: 'Medium Cup', stocks: 80, size: '12oz' },
-                    { id: '3', name: 'Large Cup', stocks: 60, size: '16oz' },
+                    { id: '1', name: 'Small Cup', size: '8oz', stocks: 100, status: true, isOffline: true },
+                    { id: '2', name: 'Medium Cup', size: '12oz', stocks: 100, status: true, isOffline: true },
+                    { id: '3', name: 'Large Cup', size: '16oz', stocks: 100, status: true, isOffline: true },
                 ];
                 setCupItems(initialCups);
             }
@@ -409,11 +457,19 @@ export default function ItemsScreen() {
     const paginatedItems = filteredItems.slice(startIndex, startIndex + itemsPerPage);
 
     const handleAddNewItem = () => {
+        if (!isAdmin) {
+            Alert.alert('Access Denied', 'Only administrators can add new items.');
+            return;
+        }
         router.push('/add-item');
     };
 
     // Category Functions
     const openAddCategoryModal = () => {
+        if (!isAdmin) {
+            Alert.alert('Access Denied', 'Only administrators can add categories.');
+            return;
+        }
         console.log('➕ [CATEGORY MODAL] Opening ADD category modal');
         setEditingCategory(null);
         setCategoryName('');
@@ -422,6 +478,10 @@ export default function ItemsScreen() {
     };
 
     const openEditCategoryModal = (category: Category) => {
+        if (!isAdmin) {
+            Alert.alert('Access Denied', 'Only administrators can edit categories.');
+            return;
+        }
         console.log('✏️ [CATEGORY MODAL] Opening EDIT category modal');
         console.log('📝 Editing Category Data:', {
             id: category.id,
@@ -444,6 +504,10 @@ export default function ItemsScreen() {
 
     // Item Edit Functions
     const openEditItemModal = (item: MenuItem) => {
+        if (!isAdmin) {
+            Alert.alert('Access Denied', 'Only administrators can edit items.');
+            return;
+        }
         console.log('✏️ [ITEM EDIT] Opening edit modal for:', item.name);
         setEditingItem(item);
         setEditItemStocks(item.stocks.toString());
@@ -458,9 +522,48 @@ export default function ItemsScreen() {
         setEditItemPrice('');
     };
 
-    // Update item stocks and price - FIREBASE VERSION
+    // Cup Functions
+    const openAddCupModal = () => {
+        if (!isAdmin) {
+            Alert.alert('Access Denied', 'Only administrators can add cups.');
+            return;
+        }
+        console.log('➕ [CUP MODAL] Opening ADD cup modal');
+        setEditingCup(null);
+        setCupName('');
+        setCupSize('');
+        setCupStocks('100'); // Default stocks
+        setCupModalVisible(true);
+    };
+
+    const openEditCupModal = (cup: CupItem) => {
+        if (!isAdmin) {
+            Alert.alert('Access Denied', 'Only administrators can edit cups.');
+            return;
+        }
+        console.log('✏️ [CUP MODAL] Opening EDIT cup modal');
+        setEditingCup(cup);
+        setCupName(cup.name);
+        setCupSize(cup.size || '');
+        setCupStocks(cup.stocks.toString());
+        setCupModalVisible(true);
+    };
+
+    const closeCupModal = () => {
+        setCupModalVisible(false);
+        setEditingCup(null);
+        setCupName('');
+        setCupSize('');
+        setCupStocks('');
+    };
+
     // Update item stocks and price - FIREBASE VERSION
     const updateItemStocksAndPrice = async (id: string, newStocks: number, newPrice: number) => {
+        if (!isAdmin) {
+            Alert.alert('Access Denied', 'Only administrators can update items.');
+            return;
+        }
+
         try {
             const syncService = OfflineSyncService.getInstance();
             const connectionMode = await getConnectionMode();
@@ -546,7 +649,13 @@ export default function ItemsScreen() {
     };
 
     // Save category - FIREBASE VERSION with AUTO SYNC
+    // Save category - FIXED: Save to proper source based on mode
     const saveCategory = async () => {
+        if (!isAdmin) {
+            Alert.alert('Access Denied', 'Only administrators can save categories.');
+            return;
+        }
+
         if (!categoryName.trim()) {
             Alert.alert('Error', 'Please enter category name');
             return;
@@ -574,21 +683,8 @@ export default function ItemsScreen() {
             });
             console.log('🌐 Current Mode:', connectionMode === 'offline' ? 'OFFLINE' : 'ONLINE');
 
-            // STEP 1: ALWAYS SAVE TO LOCAL STORAGE FIRST
-            console.log('💾 [CATEGORY SAVE] Step 1: Saving to LOCAL storage...');
-            const localResult = await syncService.saveCategory(categoryData, false);
-
-            if (!localResult.success) {
-                console.error('❌ [CATEGORY SAVE] FAILED to save to local storage');
-                Alert.alert('Error', 'Failed to save category to local storage');
-                return;
-            }
-
-            console.log('✅ [CATEGORY SAVE] Step 1 COMPLETE: Saved to LOCAL storage');
-
-            // STEP 2: TRY TO SAVE TO FIREBASE IF ONLINE
             if (connectionMode === 'online') {
-                console.log('🔥 [CATEGORY SAVE] Step 2: Attempting to save to FIREBASE...');
+                console.log('🔥 ONLINE MODE: Saving to Firebase first...');
 
                 try {
                     const firebaseData = {
@@ -614,59 +710,65 @@ export default function ItemsScreen() {
                         console.log('➕ [CATEGORY SAVE] Created new category in Firebase');
                     }
 
-                    console.log('✅ [CATEGORY SAVE] Step 2 COMPLETE: Saved to FIREBASE successfully');
+                    console.log('✅ [CATEGORY SAVE] Step 1 COMPLETE: Saved to FIREBASE successfully');
 
-                    // STEP 3: UPDATE LOCAL STORAGE WITH FIREBASE INFO
-                    console.log('🔄 [CATEGORY SAVE] Step 3: Updating local record with Firebase info...');
-                    const updateResult = await syncService.saveCategory({
+                    // STEP 2: THEN SAVE TO LOCAL STORAGE WITH FIREBASE INFO
+                    console.log('💾 [CATEGORY SAVE] Step 2: Saving to LOCAL storage with Firebase info...');
+                    const saveResult = await syncService.saveCategory({
                         ...categoryData,
                         id: firebaseId,
                         firebaseId: firebaseId,
                         icon: categoryIcon
                     }, true);
 
-                    console.log('✅ [CATEGORY SAVE] Step 3 COMPLETE: Local record updated with Firebase ID');
+                    if (saveResult.success) {
+                        console.log('✅ [CATEGORY SAVE] Step 2 COMPLETE: Local record updated with Firebase ID');
+                        await loadCategories();
+                        Alert.alert(
+                            'Success',
+                            `Category "${categoryName}" with icon "${categoryIcon}" saved successfully to Firebase!`
+                        );
+                    } else {
+                        console.log('⚠️ Firebase saved but local backup failed');
+                        await loadCategories();
+                        Alert.alert(
+                            'Success',
+                            `Category "${categoryName}" saved to Firebase!`
+                        );
+                    }
 
-                    await loadCategories();
-                    Alert.alert(
-                        'Success',
-                        `Category "${categoryName}" with icon "${categoryIcon}" saved successfully to both local and Firebase!`
-                    );
-
-                    console.log('🎉 [CATEGORY SAVE] COMPLETE: Category with icon saved to BOTH LOCAL AND FIREBASE!');
+                    console.log('🎉 [CATEGORY SAVE] COMPLETE: Category with icon saved to FIREBASE!');
 
                 } catch (firebaseError) {
-                    console.log('⚠️ [CATEGORY SAVE] Firebase save failed, but local backup exists');
-                    console.log('💾 Local backup has icon:', categoryIcon);
+                    console.log('❌ Firebase save failed, saving to local storage only');
 
-                    // AUTO SYNC: Try to sync immediately
-                    console.log('🚀 [AUTO SYNC] Triggering immediate sync for failed Firebase save...');
-                    setTimeout(() => {
-                        syncService.trySync().catch(syncError => {
-                            console.log('📡 [AUTO SYNC] Sync failed, will retry later:', syncError);
-                        });
-                    }, 1000);
+                    // Firebase failed, save to local storage only
+                    const localResult = await syncService.saveCategory(categoryData, false);
 
+                    if (localResult.success) {
+                        await loadCategories();
+                        Alert.alert(
+                            'Saved Locally',
+                            `Category "${categoryName}" with icon "${categoryIcon}" saved to local storage. Auto-sync triggered for Firebase.`
+                        );
+                    } else {
+                        Alert.alert('Error', 'Failed to save category to local storage.');
+                    }
+                }
+            } else {
+                // OFFLINE MODE - Save to local storage only
+                console.log('📱 OFFLINE MODE: Saving to LOCAL storage only...');
+                const localResult = await syncService.saveCategory(categoryData, false);
+
+                if (localResult.success) {
                     await loadCategories();
                     Alert.alert(
                         'Saved Locally',
-                        `Category "${categoryName}" with icon "${categoryIcon}" saved to local storage. Auto-sync triggered for Firebase.`
+                        `Category "${categoryName}" with icon "${categoryIcon}" saved to local storage. Will auto-sync when online.`
                     );
+                } else {
+                    Alert.alert('Error', 'Failed to save category to local storage.');
                 }
-            } else {
-                // OFFLINE MODE - Only local save was successful
-                console.log('📱 [CATEGORY SAVE] Offline mode - Only saved to LOCAL storage');
-
-                // AUTO SYNC: Add to pending sync queue
-                console.log('📬 [AUTO SYNC] Adding to pending sync queue...');
-                const pendingItems = await syncService.getPendingItems();
-                console.log('📊 Current pending items:', pendingItems.length);
-
-                await loadCategories();
-                Alert.alert(
-                    'Saved Locally',
-                    `Category "${categoryName}" with icon "${categoryIcon}" saved to local storage. Will auto-sync when online.`
-                );
             }
 
             console.log('🎉 [CATEGORY SAVE] FINAL: Category with icon saved successfully!');
@@ -689,8 +791,234 @@ export default function ItemsScreen() {
         }
     };
 
+    // Save cup function
+    // Save cup function - FIXED: Save to proper source based on mode
+    const saveCup = async () => {
+        if (!isAdmin) {
+            Alert.alert('Access Denied', 'Only administrators can save cups.');
+            return;
+        }
+
+        if (!cupName.trim()) {
+            Alert.alert('Error', 'Please enter cup name');
+            return;
+        }
+
+        if (!cupSize.trim()) {
+            Alert.alert('Error', 'Please enter cup size');
+            return;
+        }
+
+        const stocksValue = parseInt(cupStocks);
+        if (isNaN(stocksValue) || stocksValue < 0) {
+            Alert.alert('Error', 'Please enter valid stocks number');
+            return;
+        }
+
+        try {
+            const syncService = OfflineSyncService.getInstance();
+            const connectionMode = await getConnectionMode();
+
+            // Prepare cup data
+            const cupData = {
+                name: cupName,
+                size: cupSize,
+                stocks: stocksValue,
+                status: true,
+                ...(editingCup && { id: editingCup.id })
+            };
+
+            console.log('🔄 [CUP SAVE] Starting cup save process...');
+            console.log('🌐 Current Mode:', connectionMode === 'offline' ? 'OFFLINE' : 'ONLINE');
+
+            if (connectionMode === 'online') {
+                console.log('🔥 ONLINE MODE: Saving to Firebase first...');
+
+                try {
+                    const firebaseData = {
+                        name: cupName,
+                        size: cupSize,
+                        stocks: stocksValue,
+                        status: true,
+                        updated_at: new Date().toISOString()
+                    };
+
+                    let firebaseId: string;
+
+                    if (editingCup && editingCup.firebaseId) {
+                        // Update existing cup in Firebase
+                        const cupDoc = doc(db, 'cups', editingCup.firebaseId);
+                        await updateDoc(cupDoc, firebaseData);
+                        firebaseId = editingCup.firebaseId;
+                        console.log('📝 [CUP SAVE] Updated existing cup in Firebase');
+                    } else {
+                        // Create new cup in Firebase
+                        const docRef = await addDoc(collection(db, 'cups'), {
+                            ...firebaseData,
+                            created_at: new Date().toISOString()
+                        });
+                        firebaseId = docRef.id;
+                        console.log('➕ [CUP SAVE] Created new cup in Firebase');
+                    }
+
+                    console.log('✅ [CUP SAVE] Step 1 COMPLETE: Saved to FIREBASE successfully');
+
+                    // STEP 2: THEN SAVE TO LOCAL STORAGE WITH FIREBASE INFO
+                    console.log('💾 [CUP SAVE] Step 2: Saving to LOCAL storage with Firebase info...');
+
+                    let localSuccess;
+                    if (editingCup) {
+                        // Update existing cup in local storage
+                        const currentCups = await syncService.getCups();
+                        const updatedCups = currentCups.map(cup =>
+                            cup.id === editingCup.id
+                                ? { ...cup, name: cupName, size: cupSize, stocks: stocksValue, firebaseId: firebaseId, isOffline: false }
+                                : cup
+                        );
+                        await syncService.saveCups(updatedCups);
+                        localSuccess = true;
+                    } else {
+                        // Create new cup in local storage
+                        const currentCups = await syncService.getCups();
+                        const newCup: CupItem = {
+                            id: firebaseId,
+                            name: cupName,
+                            size: cupSize,
+                            stocks: stocksValue,
+                            status: true,
+                            isOffline: false,
+                            firebaseId: firebaseId
+                        };
+                        const updatedCups = [...currentCups, newCup];
+                        await syncService.saveCups(updatedCups);
+                        localSuccess = true;
+                    }
+
+                    if (localSuccess) {
+                        console.log('✅ [CUP SAVE] Step 2 COMPLETE: Saved to LOCAL storage with Firebase ID');
+                        await loadCups();
+                        Alert.alert(
+                            'Success',
+                            `Cup "${cupName}" saved successfully to Firebase!`
+                        );
+                    } else {
+                        console.log('⚠️ Firebase saved but local backup failed');
+                        await loadCups();
+                        Alert.alert(
+                            'Success',
+                            `Cup "${cupName}" saved to Firebase!`
+                        );
+                    }
+
+                } catch (firebaseError) {
+                    console.log('❌ Firebase save failed, saving to local storage only');
+
+                    // Firebase failed, save to local storage only
+                    let localSuccess;
+                    if (editingCup) {
+                        // Update existing cup in local storage
+                        const currentCups = await syncService.getCups();
+                        const updatedCups = currentCups.map(cup =>
+                            cup.id === editingCup.id
+                                ? { ...cup, name: cupName, size: cupSize, stocks: stocksValue }
+                                : cup
+                        );
+                        await syncService.saveCups(updatedCups);
+                        localSuccess = true;
+                    } else {
+                        // Create new cup in local storage
+                        const currentCups = await syncService.getCups();
+                        const newCup: CupItem = {
+                            id: Date.now().toString(),
+                            name: cupName,
+                            size: cupSize,
+                            stocks: stocksValue,
+                            status: true,
+                            isOffline: true
+                        };
+                        const updatedCups = [...currentCups, newCup];
+                        await syncService.saveCups(updatedCups);
+                        localSuccess = true;
+                    }
+
+                    if (localSuccess) {
+                        await loadCups();
+                        Alert.alert(
+                            'Saved Locally',
+                            `Cup "${cupName}" saved to local storage. Auto-sync triggered for Firebase.`
+                        );
+                    } else {
+                        Alert.alert('Error', 'Failed to save cup to local storage.');
+                    }
+                }
+            } else {
+                // OFFLINE MODE - Save to local storage only
+                console.log('📱 OFFLINE MODE: Saving to LOCAL storage only...');
+
+                let localSuccess;
+                if (editingCup) {
+                    // Update existing cup in local storage
+                    const currentCups = await syncService.getCups();
+                    const updatedCups = currentCups.map(cup =>
+                        cup.id === editingCup.id
+                            ? { ...cup, name: cupName, size: cupSize, stocks: stocksValue }
+                            : cup
+                    );
+                    await syncService.saveCups(updatedCups);
+                    localSuccess = true;
+                } else {
+                    // Create new cup in local storage
+                    const currentCups = await syncService.getCups();
+                    const newCup: CupItem = {
+                        id: Date.now().toString(),
+                        name: cupName,
+                        size: cupSize,
+                        stocks: stocksValue,
+                        status: true,
+                        isOffline: true
+                    };
+                    const updatedCups = [...currentCups, newCup];
+                    await syncService.saveCups(updatedCups);
+                    localSuccess = true;
+                }
+
+                if (localSuccess) {
+                    await loadCups();
+                    Alert.alert(
+                        'Saved Locally',
+                        `Cup "${cupName}" saved to local storage. Will auto-sync when online.`
+                    );
+                } else {
+                    Alert.alert('Error', 'Failed to save cup to local storage.');
+                }
+            }
+
+            console.log('🎉 [CUP SAVE] FINAL: Cup saved successfully!');
+            closeCupModal();
+
+            // AUTO SYNC: Trigger immediate sync attempt
+            setTimeout(() => {
+                syncService.trySync().catch(syncError => {
+                    console.log('📡 [AUTO SYNC] Immediate sync failed:', syncError);
+                });
+            }, 2000);
+
+        } catch (error) {
+            console.error('❌ [CUP SAVE] Error saving cup:', error);
+            Alert.alert(
+                'Error',
+                `Failed to save cup: ${error instanceof Error ? error.message : 'Unknown error'}`
+            );
+        }
+    };
+
     // Delete category - FIREBASE VERSION
     const deleteCategory = async (id: string) => {
+        if (!isAdmin) {
+            Alert.alert('Access Denied', 'Only administrators can delete categories.');
+            return;
+        }
+
         Alert.alert(
             'Delete Category',
             'Are you sure you want to delete this category?',
@@ -787,7 +1115,7 @@ export default function ItemsScreen() {
 
                                     const pendingItems = await syncService.getPendingItems();
                                     const filteredPendingItems = pendingItems.filter(item => item.id !== id);
-                                    filteredPendingItems.push(pendingDelete);
+
                                     await syncService.setItem('pendingItems', JSON.stringify(filteredPendingItems));
 
                                     Alert.alert(
@@ -815,7 +1143,7 @@ export default function ItemsScreen() {
 
                                     const pendingItems = await syncService.getPendingItems();
                                     const filteredPendingItems = pendingItems.filter(item => item.id !== id);
-                                    filteredPendingItems.push(pendingDelete);
+
                                     await syncService.setItem('pendingItems', JSON.stringify(filteredPendingItems));
                                 }
 
@@ -852,8 +1180,133 @@ export default function ItemsScreen() {
         );
     };
 
+    // Delete cup function
+    const deleteCup = async (id: string) => {
+        if (!isAdmin) {
+            Alert.alert('Access Denied', 'Only administrators can delete cups.');
+            return;
+        }
+
+        Alert.alert(
+            'Delete Cup',
+            'Are you sure you want to delete this cup?',
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: 'Delete',
+                    style: 'destructive',
+                    onPress: async () => {
+                        try {
+                            const syncService = OfflineSyncService.getInstance();
+                            const connectionMode = await getConnectionMode();
+
+                            // Find the cup first
+                            const cupToDelete = cupItems.find(cup => cup.id === id);
+                            if (!cupToDelete) {
+                                Alert.alert('Error', 'Cup not found');
+                                return;
+                            }
+
+                            console.log('🗑️ [CUP DELETE] Starting delete process for cup:', cupToDelete.name);
+
+                            // STEP 1: ALWAYS DELETE FROM LOCAL STORAGE FIRST
+                            console.log('💾 [CUP DELETE] Step 1: Deleting from LOCAL storage...');
+                            const currentCups = await syncService.getCups();
+                            const updatedCups = currentCups.filter(cup => cup.id !== id);
+                            await syncService.saveCups(updatedCups);
+
+                            console.log('✅ [CUP DELETE] Step 1 COMPLETE: Deleted from LOCAL storage');
+
+                            // STEP 2: TRY TO DELETE FROM FIREBASE IF ONLINE AND IT'S AN ONLINE CUP
+                            if (connectionMode === 'online' && !cupToDelete.isOffline && cupToDelete.firebaseId) {
+                                console.log('🔥 [CUP DELETE] Step 2: Attempting to delete from FIREBASE...');
+
+                                try {
+                                    const cupDoc = doc(db, 'cups', cupToDelete.firebaseId);
+                                    await deleteDoc(cupDoc);
+
+                                    console.log('✅ [CUP DELETE] Step 2 COMPLETE: Deleted from FIREBASE successfully');
+                                    Alert.alert('Success', 'Cup deleted successfully from both local and Firebase!');
+
+                                } catch (firebaseError) {
+                                    console.log('⚠️ [CUP DELETE] Firebase delete failed, but local delete completed');
+
+                                    // Add to pending items for later Firebase deletion
+                                    const pendingDelete: PendingItem = {
+                                        id: id,
+                                        type: 'DELETE_CUP',
+                                        data: { id: id, name: cupToDelete.name, firebaseId: cupToDelete.firebaseId },
+                                        timestamp: Date.now(),
+                                        retryCount: 0
+                                    };
+
+                                    const pendingItems = await syncService.getPendingItems();
+                                    const filteredPendingItems = pendingItems.filter(item => item.id !== id);
+
+                                    await syncService.setItem('pendingItems', JSON.stringify(filteredPendingItems));
+
+                                    Alert.alert(
+                                        'Deleted Locally',
+                                        'Cup deleted from local storage. Firebase deletion will be retried later.'
+                                    );
+                                }
+                            } else {
+                                // OFFLINE MODE or OFFLINE CUP - Only local delete was successful
+                                if (cupToDelete.isOffline) {
+                                    console.log('📱 [CUP DELETE] Offline cup - Only deleted from LOCAL storage');
+                                } else {
+                                    console.log('📡 [CUP DELETE] Offline mode - Only deleted from LOCAL storage');
+                                }
+
+                                // Add to pending items for later Firebase deletion (if it was an online cup)
+                                if (!cupToDelete.isOffline && cupToDelete.firebaseId) {
+                                    const pendingDelete: PendingItem = {
+                                        id: id,
+                                        type: 'DELETE_CUP',
+                                        data: { id: id, name: cupToDelete.name, firebaseId: cupToDelete.firebaseId },
+                                        timestamp: Date.now(),
+                                        retryCount: 0
+                                    };
+
+                                    const pendingItems = await syncService.getPendingItems();
+                                    const filteredPendingItems = pendingItems.filter(item => item.id !== id);
+
+                                    await syncService.setItem('pendingItems', JSON.stringify(filteredPendingItems));
+                                }
+
+                                Alert.alert(
+                                    'Deleted Locally',
+                                    'Cup deleted from local storage.' +
+                                    (!cupToDelete.isOffline ? ' Will sync deletion when online.' : '')
+                                );
+                            }
+
+                            // STEP 3: UPDATE UI
+                            console.log('🎨 [CUP DELETE] Step 3: Updating UI...');
+                            setCupItems(prev => prev.filter(cup => cup.id !== id));
+
+                            console.log('🎉 [CUP DELETE] DELETE PROCESS COMPLETED!');
+
+                        } catch (error) {
+                            console.error('❌ [CUP DELETE] Error in delete process:', error);
+                            Alert.alert(
+                                'Error',
+                                `Failed to delete cup: ${error instanceof Error ? error.message : 'Unknown error'}`
+                            );
+                        }
+                    }
+                }
+            ]
+        );
+    };
+
     // Update cup stocks - FIREBASE VERSION
     const updateCupStocks = async (id: string, newStocks: number) => {
+        if (!isAdmin) {
+            Alert.alert('Access Denied', 'Only administrators can update cup stocks.');
+            return;
+        }
+
         try {
             const syncService = OfflineSyncService.getInstance();
             const connectionMode = await getConnectionMode();
@@ -908,13 +1361,17 @@ export default function ItemsScreen() {
             }
 
         } catch (error) {
-            console.error('Error updating cup stocks:', error);
+            console.error('❌ Error updating cup stocks:', error);
             Alert.alert('Error', 'Failed to update cup stocks');
         }
     };
 
     // Function to open edit stocks modal
     const openEditStocksModal = (cup: CupItem) => {
+        if (!isAdmin) {
+            Alert.alert('Access Denied', 'Only administrators can edit cup stocks.');
+            return;
+        }
         setSelectedCup(cup);
         setNewStocks(cup.stocks.toString());
         setEditStocksModal(true);
@@ -942,7 +1399,13 @@ export default function ItemsScreen() {
     };
 
     // Delete item - FIREBASE VERSION
+    // Delete item - FIREBASE VERSION (FIXED)
     const deleteItem = async (id: string) => {
+        if (!isAdmin) {
+            Alert.alert('Access Denied', 'Only administrators can delete items.');
+            return;
+        }
+
         Alert.alert(
             'Delete Item',
             'Are you sure you want to delete this item?',
@@ -959,6 +1422,11 @@ export default function ItemsScreen() {
 
                             // Find the item first to check if it's offline
                             const itemToDelete = menuItems.find(item => item.id === id);
+                            if (!itemToDelete) {
+                                Alert.alert('Error', 'Item not found');
+                                return;
+                            }
+
                             const isOfflineItem = itemToDelete?.isOffline;
 
                             // Get current counts before deletion
@@ -970,65 +1438,112 @@ export default function ItemsScreen() {
                             console.log('   Local Storage:', localItemsBefore.length);
                             console.log('   Item to delete:', itemToDelete?.name, `(ID: ${id})`);
 
-                            if (connectionMode === 'offline' || isOfflineItem) {
-                                // OFFLINE MODE or OFFLINE ITEM: Remove from local storage
-                                console.log('📱 DELETING FROM LOCAL STORAGE...');
+                            // STEP 1: ALWAYS DELETE FROM LOCAL STORAGE FIRST
+                            console.log('🗑️ Step 1: Deleting from LOCAL storage...');
+                            const localSuccess = await syncService.deleteLocalItem(id);
 
-                                const success = await syncService.deleteLocalItem(id);
-
-                                if (success) {
-                                    // Remove from local state
-                                    setMenuItems(prev => prev.filter(item => item.id !== id));
-
-                                    // Get counts after deletion
-                                    const localItemsAfter = await syncService.getItems();
-                                    const totalItemsAfter = menuItems.length - 1;
-
-                                    console.log('🎯 DELETION COMPLETE - LOCAL STORAGE:');
-                                    console.log('   UI Items:', totalItemsAfter, `(-1)`);
-                                    console.log('   Local Storage:', localItemsAfter.length, `(-${localItemsBefore.length - localItemsAfter.length})`);
-
-                                    Alert.alert(
-                                        'Success',
-                                        `Item deleted successfully from local storage\n\nRemaining: ${localItemsAfter.length} items in local storage`
-                                    );
-                                } else {
-                                    Alert.alert('Error', 'Failed to delete item from local storage');
-                                }
+                            if (!localSuccess) {
+                                Alert.alert('Error', 'Failed to delete item from local storage');
                                 return;
                             }
 
-                            // ONLINE MODE + ONLINE ITEM: Delete from Firebase
-                            console.log('🔥 DELETING FROM FIREBASE...');
+                            console.log('✅ Step 1 COMPLETE: Deleted from LOCAL storage');
 
-                            if (itemToDelete?.firebaseId) {
-                                const itemDoc = doc(db, 'items', itemToDelete.firebaseId);
-                                await deleteDoc(itemDoc);
+                            // STEP 2: TRY TO DELETE FROM FIREBASE IF ONLINE AND IT'S AN ONLINE ITEM
+                            if (connectionMode === 'online' && !isOfflineItem && itemToDelete.firebaseId) {
+                                console.log('🔥 Step 2: Attempting to delete from FIREBASE...');
+
+                                try {
+                                    const itemDoc = doc(db, 'items', itemToDelete.firebaseId);
+                                    await deleteDoc(itemDoc);
+
+                                    console.log('✅ Step 2 COMPLETE: Deleted from FIREBASE successfully');
+
+                                    // Remove from local state
+                                    setMenuItems(prev => prev.filter(item => item.id !== id));
+
+                                    Alert.alert(
+                                        'Success',
+                                        'Item deleted successfully from both local storage and Firebase!'
+                                    );
+
+                                } catch (firebaseError) {
+                                    console.log('⚠️ Firebase delete failed, but local delete completed');
+
+                                    // Add to pending items for later Firebase deletion
+                                    const pendingDelete: PendingItem = {
+                                        id: id,
+                                        type: 'DELETE_ITEM',
+                                        data: {
+                                            id: id,
+                                            name: itemToDelete.name,
+                                            firebaseId: itemToDelete.firebaseId
+                                        },
+                                        timestamp: Date.now(),
+                                        retryCount: 0
+                                    };
+
+                                    const pendingItems = await syncService.getPendingItems();
+                                    const filteredPendingItems = pendingItems.filter(item => item.id !== id);
+                                    filteredPendingItems.push(pendingDelete);
+
+                                    await syncService.setItem('pendingItems', JSON.stringify(filteredPendingItems));
+
+                                    // Remove from local state
+                                    setMenuItems(prev => prev.filter(item => item.id !== id));
+
+                                    Alert.alert(
+                                        'Deleted Locally',
+                                        'Item deleted from local storage. Firebase deletion will be retried later.'
+                                    );
+                                }
+                            } else {
+                                // OFFLINE MODE or OFFLINE ITEM - Only local delete was successful
+                                if (isOfflineItem) {
+                                    console.log('📱 Offline item - Only deleted from LOCAL storage');
+                                } else {
+                                    console.log('📡 Offline mode - Only deleted from LOCAL storage');
+                                }
+
+                                // Add to pending items for later Firebase deletion (if it was an online item)
+                                if (!isOfflineItem && itemToDelete.firebaseId) {
+                                    const pendingDelete: PendingItem = {
+                                        id: id,
+                                        type: 'DELETE_ITEM',
+                                        data: {
+                                            id: id,
+                                            name: itemToDelete.name,
+                                            firebaseId: itemToDelete.firebaseId
+                                        },
+                                        timestamp: Date.now(),
+                                        retryCount: 0
+                                    };
+
+                                    const pendingItems = await syncService.getPendingItems();
+                                    const filteredPendingItems = pendingItems.filter(item => item.id !== id);
+                                    filteredPendingItems.push(pendingDelete);
+
+                                    await syncService.setItem('pendingItems', JSON.stringify(filteredPendingItems));
+                                }
 
                                 // Remove from local state
                                 setMenuItems(prev => prev.filter(item => item.id !== id));
 
-                                // Also remove from local storage if it exists there (for backup)
-                                await syncService.deleteLocalItem(id);
-
-                                // Get counts after deletion
-                                const localItemsAfter = await syncService.getItems();
-                                const totalItemsAfter = menuItems.length - 1;
-
-                                console.log('🎯 DELETION COMPLETE - FIREBASE:');
-                                console.log('   UI Items:', totalItemsAfter, `(-1)`);
-                                console.log('   Local Storage:', localItemsAfter.length, `(-${localItemsBefore.length - localItemsAfter.length})`);
-
                                 Alert.alert(
-                                    'Success',
-                                    `Item deleted successfully from Firebase\n\nRemaining: ${totalItemsAfter} items in list\nLocal storage: ${localItemsAfter.length} items`
+                                    'Deleted Locally',
+                                    'Item deleted from local storage.' +
+                                    (!isOfflineItem ? ' Will sync deletion when online.' : '')
                                 );
-                            } else {
-                                Alert.alert('Error', 'Item not found in Firebase');
                             }
+
+                            console.log('🎉 DELETE PROCESS COMPLETED!');
+
                         } catch (error) {
-                            console.error('❌ Error deleting item:', error);
-                            Alert.alert('Error', 'Failed to delete item');
+                            console.error('❌ Error in delete process:', error);
+                            Alert.alert(
+                                'Error',
+                                `Failed to delete item: ${error instanceof Error ? error.message : 'Unknown error'}`
+                            );
                         } finally {
                             setLoading(false);
                         }
@@ -1037,9 +1552,13 @@ export default function ItemsScreen() {
             ]
         );
     };
-
     // Toggle item status - FIREBASE VERSION
     const toggleStatus = async (id: string) => {
+        if (!isAdmin) {
+            Alert.alert('Access Denied', 'Only administrators can toggle item status.');
+            return;
+        }
+
         try {
             const connectionMode = await getConnectionMode();
             if (connectionMode === 'offline') {
@@ -1159,12 +1678,13 @@ export default function ItemsScreen() {
                                     {activeSidebar === 'cups' && 'Cups Management'}
                                 </ThemedText>
                                 <ThemedText style={styles.modeInfo}>
-                                    {isOnlineMode ? 'Connected to server' : 'Using local storage'}
+                                    {isOnlineMode ? 'Connected to server' : 'Using local storage'} |
+                                    Role: {isAdmin ? '👑 ADMIN' : '👤 USER'}
                                 </ThemedText>
                             </ThemedView>
 
                             <ThemedView style={styles.headerActions}>
-                                {/* Gi-dugang: Reload button */}
+                                {/* Reload button */}
                                 <TouchableOpacity
                                     style={styles.reloadButton}
                                     onPress={() => {
@@ -1176,26 +1696,26 @@ export default function ItemsScreen() {
                                     <Feather name="refresh-cw" size={18} color="#874E3B" />
                                 </TouchableOpacity>
 
-                                {activeSidebar === 'cups' && (
-                                    <TouchableOpacity style={styles.addNewButton} onPress={() => console.log('Add new cup')}>
-                                        <Feather name="plus" size={16} color="#FFFEEA" />
-                                        <ThemedText style={styles.addNewButtonText}>Add Cup</ThemedText>
-                                    </TouchableOpacity>
-                                )}
-
-                                {activeSidebar === 'categories' && (
+                                {activeSidebar === 'categories' && isAdmin && (
                                     <TouchableOpacity style={styles.addNewButton} onPress={openAddCategoryModal}>
                                         <Feather name="plus" size={16} color="#FFFEEA" />
                                         <ThemedText style={styles.addNewButtonText}>Add New</ThemedText>
                                     </TouchableOpacity>
                                 )}
 
-                                {activeSidebar === 'food-items' && (
+                                {activeSidebar === 'food-items' && isAdmin && (
                                     <TouchableOpacity style={styles.addNewButton} onPress={handleAddNewItem} disabled={loading}>
                                         <Feather name="plus" size={16} color="#FFFEEA" />
                                         <ThemedText style={styles.addNewButtonText}>
                                             {loading ? 'Loading...' : 'Add New'}
                                         </ThemedText>
+                                    </TouchableOpacity>
+                                )}
+
+                                {activeSidebar === 'cups' && isAdmin && (
+                                    <TouchableOpacity style={styles.addNewButton} onPress={openAddCupModal}>
+                                        <Feather name="plus" size={16} color="#FFFEEA" />
+                                        <ThemedText style={styles.addNewButtonText}>Add New</ThemedText>
                                     </TouchableOpacity>
                                 )}
 
@@ -1226,7 +1746,10 @@ export default function ItemsScreen() {
                                     <ThemedText style={[styles.headerText, styles.stocksHeader]}>Stocks</ThemedText>
                                     <ThemedText style={[styles.headerText, styles.priceHeader]}>Price</ThemedText>
                                     <ThemedText style={[styles.headerText, styles.salesHeader]}>Sales</ThemedText>
-                                    <ThemedText style={[styles.headerText, styles.actionsHeader]}>Actions</ThemedText>
+                                    {/* Actions column only for admin */}
+                                    {isAdmin && (
+                                        <ThemedText style={[styles.headerText, styles.actionsHeader]}>Actions</ThemedText>
+                                    )}
                                 </ThemedView>
 
                                 <ScrollView style={styles.tableContent}>
@@ -1245,7 +1768,7 @@ export default function ItemsScreen() {
                                                     {item.code}
                                                 </ThemedText>
                                                 <ThemedText style={[styles.cellText, styles.nameCell]}>{item.name}</ThemedText>
-                                                {/* Add this status cell */}
+                                                {/* Status cell */}
                                                 <ThemedView style={[styles.statusCell, item.isOffline ? styles.offlineStatus : styles.onlineStatus]}>
                                                     <ThemedText style={styles.statusText}>
                                                         {item.isOffline ? '📱 Offline' : '🌐 Online'}
@@ -1255,34 +1778,37 @@ export default function ItemsScreen() {
                                                 <ThemedText style={[styles.cellText, styles.stocksCell]}>{item.stocks}</ThemedText>
                                                 <ThemedText style={[styles.cellText, styles.priceCell]}>₱{item.price.toFixed(2)}</ThemedText>
                                                 <ThemedText style={[styles.cellText, styles.salesCell]}>{item.sales}</ThemedText>
-                                                <ThemedView style={styles.actionsCell}>
-                                                    <TouchableOpacity
-                                                        style={[
-                                                            styles.statusButton,
-                                                            item.status ? styles.statusActive : styles.statusInactive
-                                                        ]}
-                                                        onPress={() => toggleStatus(item.id)}
-                                                    >
-                                                        <Feather
-                                                            name={item.status ? "check" : "x"}
-                                                            size={16}
-                                                            color={item.status ? "#16A34A" : "#DC2626"}
-                                                        />
-                                                    </TouchableOpacity>
-                                                    {/* EDIT BUTTON - Pencil Icon */}
-                                                    <TouchableOpacity
-                                                        style={styles.editButton}
-                                                        onPress={() => openEditItemModal(item)}
-                                                    >
-                                                        <Feather name="edit-2" size={16} color="#874E3B" />
-                                                    </TouchableOpacity>
-                                                    <TouchableOpacity
-                                                        style={styles.deleteButton}
-                                                        onPress={() => deleteItem(item.id)}
-                                                    >
-                                                        <Feather name="trash-2" size={16} color="#DC2626" />
-                                                    </TouchableOpacity>
-                                                </ThemedView>
+                                                {/* Actions cell only for admin */}
+                                                {isAdmin && (
+                                                    <ThemedView style={styles.actionsCell}>
+                                                        <TouchableOpacity
+                                                            style={[
+                                                                styles.statusButton,
+                                                                item.status ? styles.statusActive : styles.statusInactive
+                                                            ]}
+                                                            onPress={() => toggleStatus(item.id)}
+                                                        >
+                                                            <Feather
+                                                                name={item.status ? "check" : "x"}
+                                                                size={16}
+                                                                color={item.status ? "#16A34A" : "#DC2626"}
+                                                            />
+                                                        </TouchableOpacity>
+                                                        {/* EDIT BUTTON - Pencil Icon */}
+                                                        <TouchableOpacity
+                                                            style={styles.editButton}
+                                                            onPress={() => openEditItemModal(item)}
+                                                        >
+                                                            <Feather name="edit-2" size={16} color="#874E3B" />
+                                                        </TouchableOpacity>
+                                                        <TouchableOpacity
+                                                            style={styles.deleteButton}
+                                                            onPress={() => deleteItem(item.id)}
+                                                        >
+                                                            <Feather name="trash-2" size={16} color="#DC2626" />
+                                                        </TouchableOpacity>
+                                                    </ThemedView>
+                                                )}
                                             </ThemedView>
                                         ))
                                     )}
@@ -1358,7 +1884,10 @@ export default function ItemsScreen() {
                                     <ThemedText style={[styles.headerText, styles.categoryNameHeader]}>Category Name</ThemedText>
                                     <ThemedText style={[styles.headerText, styles.categoryItemsHeader]}>Items in Category</ThemedText>
                                     <ThemedText style={[styles.headerText, styles.categoryDateHeader]}>Created on</ThemedText>
-                                    <ThemedText style={[styles.headerText, styles.categoryActionsHeader]}>Actions</ThemedText>
+                                    {/* Actions column only for admin */}
+                                    {isAdmin && (
+                                        <ThemedText style={[styles.headerText, styles.categoryActionsHeader]}>Actions</ThemedText>
+                                    )}
                                 </ThemedView>
 
                                 <ScrollView style={styles.tableContent}>
@@ -1389,30 +1918,33 @@ export default function ItemsScreen() {
                                                 <ThemedText style={[styles.cellText, styles.categoryDateCell]}>
                                                     {category.created_on}
                                                 </ThemedText>
-                                                <ThemedView style={styles.categoryActionsCell}>
-                                                    <TouchableOpacity
-                                                        style={styles.editButton}
-                                                        onPress={() => openEditCategoryModal(category)}
-                                                    >
-                                                        <Feather name="edit-2" size={16} color="#874E3B" />
-                                                    </TouchableOpacity>
-                                                    <TouchableOpacity
-                                                        style={styles.deleteButton}
-                                                        onPress={() => deleteCategory(category.id)}
-                                                    >
-                                                        <Feather name="trash-2" size={16} color="#DC2626" />
-                                                    </TouchableOpacity>
-                                                    <ThemedView style={[
-                                                        styles.checkIndicator,
-                                                        category.isOffline ? styles.offlineCheck : styles.onlineCheck
-                                                    ]}>
-                                                        <Feather
-                                                            name="check"
-                                                            size={14}
-                                                            color={category.isOffline ? "#666" : "#0084FF"}
-                                                        />
+                                                {/* Actions cell only for admin */}
+                                                {isAdmin && (
+                                                    <ThemedView style={styles.categoryActionsCell}>
+                                                        <TouchableOpacity
+                                                            style={styles.editButton}
+                                                            onPress={() => openEditCategoryModal(category)}
+                                                        >
+                                                            <Feather name="edit-2" size={16} color="#874E3B" />
+                                                        </TouchableOpacity>
+                                                        <TouchableOpacity
+                                                            style={styles.deleteButton}
+                                                            onPress={() => deleteCategory(category.id)}
+                                                        >
+                                                            <Feather name="trash-2" size={16} color="#DC2626" />
+                                                        </TouchableOpacity>
+                                                        <ThemedView style={[
+                                                            styles.checkIndicator,
+                                                            category.isOffline ? styles.offlineCheck : styles.onlineCheck
+                                                        ]}>
+                                                            <Feather
+                                                                name="check"
+                                                                size={14}
+                                                                color={category.isOffline ? "#666" : "#0084FF"}
+                                                            />
+                                                        </ThemedView>
                                                     </ThemedView>
-                                                </ThemedView>
+                                                )}
                                             </ThemedView>
                                         ))
                                     )}
@@ -1426,7 +1958,10 @@ export default function ItemsScreen() {
                                     <ThemedText style={[styles.headerText, styles.cupNameHeader]}>Cup Name</ThemedText>
                                     <ThemedText style={[styles.headerText, styles.cupSizeHeader]}>Size</ThemedText>
                                     <ThemedText style={[styles.headerText, styles.cupStocksHeader]}>Stocks</ThemedText>
-                                    <ThemedText style={[styles.headerText, styles.cupActionsHeader]}>Actions</ThemedText>
+                                    {/* Actions column only for admin */}
+                                    {isAdmin && (
+                                        <ThemedText style={[styles.headerText, styles.cupActionsHeader]}>Actions</ThemedText>
+                                    )}
                                 </ThemedView>
 
                                 <ScrollView style={styles.tableContent}>
@@ -1446,26 +1981,36 @@ export default function ItemsScreen() {
                                                 </ThemedText>
                                                 <ThemedText style={[styles.cellText, styles.cupSizeCell]}>{cup.size || 'N/A'}</ThemedText>
                                                 <ThemedText style={[styles.cellText, styles.cupStocksCell]}>{cup.stocks}</ThemedText>
-                                                <ThemedView style={styles.cupActionsCell}>
-                                                    <TouchableOpacity
-                                                        style={styles.stockButton}
-                                                        onPress={() => openEditStocksModal(cup)}
-                                                    >
-                                                        <Feather name="edit-2" size={16} color="#874E3B" />
-                                                    </TouchableOpacity>
-                                                    <TouchableOpacity
-                                                        style={styles.addStockButton}
-                                                        onPress={() => updateCupStocks(cup.id, cup.stocks + 10)}
-                                                    >
-                                                        <Feather name="plus" size={16} color="#16A34A" />
-                                                    </TouchableOpacity>
-                                                    <TouchableOpacity
-                                                        style={styles.removeStockButton}
-                                                        onPress={() => updateCupStocks(cup.id, Math.max(0, cup.stocks - 10))}
-                                                    >
-                                                        <Feather name="minus" size={16} color="#DC2626" />
-                                                    </TouchableOpacity>
-                                                </ThemedView>
+                                                {/* Actions cell only for admin */}
+                                                {isAdmin && (
+                                                    <ThemedView style={styles.cupActionsCell}>
+
+                                                        <TouchableOpacity
+                                                            style={styles.editButton}
+                                                            onPress={() => openEditCupModal(cup)}
+                                                        >
+                                                            <Feather name="edit-2" size={16} color="#874E3B" />
+                                                        </TouchableOpacity>
+                                                        <TouchableOpacity
+                                                            style={styles.deleteButton}
+                                                            onPress={() => deleteCup(cup.id)}
+                                                        >
+                                                            <Feather name="trash-2" size={16} color="#DC2626" />
+                                                        </TouchableOpacity>
+                                                        <TouchableOpacity
+                                                            style={styles.addStockButton}
+                                                            onPress={() => updateCupStocks(cup.id, cup.stocks + 10)}
+                                                        >
+                                                            <Feather name="plus" size={16} color="#16A34A" />
+                                                        </TouchableOpacity>
+                                                        <TouchableOpacity
+                                                            style={styles.removeStockButton}
+                                                            onPress={() => updateCupStocks(cup.id, Math.max(0, cup.stocks - 10))}
+                                                        >
+                                                            <Feather name="minus" size={16} color="#DC2626" />
+                                                        </TouchableOpacity>
+                                                    </ThemedView>
+                                                )}
                                             </ThemedView>
                                         ))
                                     )}
@@ -1491,25 +2036,7 @@ export default function ItemsScreen() {
                                 </TouchableOpacity>
                             </ThemedView>
 
-                            <ThemedView style={styles.modalContent}>
-                                <ThemedText style={styles.inputLabel}>
-                                    Current Stocks: {selectedCup.stocks}
-                                </ThemedText>
 
-                                <ThemedView style={styles.inputContainer}>
-                                    <ThemedText style={styles.inputLabel}>
-                                        New Stocks:
-                                    </ThemedText>
-                                    <TextInput
-                                        style={styles.stocksInput}
-                                        value={newStocks}
-                                        onChangeText={setNewStocks}
-                                        keyboardType="numeric"
-                                        placeholder="Enter number of stocks"
-                                        placeholderTextColor="#9CA3AF"
-                                    />
-                                </ThemedView>
-                            </ThemedView>
 
                             <ThemedView style={styles.modalActions}>
                                 <TouchableOpacity
@@ -1535,6 +2062,7 @@ export default function ItemsScreen() {
                 )}
 
                 {/* Category Modal */}
+                {/* Category Modal */}
                 <Modal
                     visible={categoryModalVisible}
                     animationType="slide"
@@ -1555,52 +2083,67 @@ export default function ItemsScreen() {
                                 </TouchableOpacity>
                             </ThemedView>
 
-                            <ThemedView style={styles.modalContent}>
-                                <ThemedView style={styles.inputContainer}>
-                                    <ThemedText style={styles.inputLabel}>
-                                        Category Name:
-                                    </ThemedText>
-                                    <TextInput
-                                        style={styles.stocksInput}
-                                        value={categoryName}
-                                        onChangeText={setCategoryName}
-                                        placeholder="Enter category name"
-                                        placeholderTextColor="#9CA3AF"
-                                    />
+                            <ScrollView
+                                style={styles.modalContentScroll}
+                                keyboardShouldPersistTaps="handled"
+                                showsVerticalScrollIndicator={false}
+                            >
+                                <ThemedView style={styles.modalContent}>
+                                    <ThemedView style={styles.inputContainer}>
+                                        <ThemedText style={styles.inputLabel}>
+                                            Category Name:
+                                        </ThemedText>
+                                        <TextInput
+                                            style={styles.textInput}
+                                            value={categoryName}
+                                            onChangeText={setCategoryName}
+                                            placeholder="Enter category name"
+                                            placeholderTextColor="#9CA3AF"
+                                            autoFocus={true} // Auto focus on input
+                                            returnKeyType="done"
+                                            onSubmitEditing={saveCategory} // Allow saving with keyboard return
+                                        />
+                                    </ThemedView>
+
+                                    <ThemedView style={styles.inputContainer}>
+                                        <ThemedText style={styles.inputLabel}>
+                                            Select Icon: {categoryIcon && `(Selected: ${categoryIcon})`}
+                                        </ThemedText>
+                                        <ScrollView
+                                            horizontal
+                                            style={styles.iconsContainer}
+                                            keyboardShouldPersistTaps="handled"
+                                            showsHorizontalScrollIndicator={false}
+                                        >
+                                            {availableIcons.map((icon) => (
+                                                <TouchableOpacity
+                                                    key={icon}
+                                                    style={[
+                                                        styles.iconOption,
+                                                        categoryIcon === icon && styles.iconOptionSelected
+                                                    ]}
+                                                    onPress={() => {
+                                                        console.log('🎯 User selected icon:', icon);
+                                                        setCategoryIcon(icon);
+                                                    }}
+                                                >
+                                                    <Feather
+                                                        name={icon as any}
+                                                        size={20}
+                                                        color={categoryIcon === icon ? "#FFFEEA" : "#874E3B"}
+                                                    />
+                                                    <ThemedText style={[
+                                                        styles.iconText,
+                                                        categoryIcon === icon && styles.iconTextSelected
+                                                    ]}>
+                                                        {icon}
+                                                    </ThemedText>
+                                                </TouchableOpacity>
+                                            ))}
+                                        </ScrollView>
+                                    </ThemedView>
                                 </ThemedView>
-                                <ThemedView style={styles.inputContainer}>
-                                    <ThemedText style={styles.inputLabel}>
-                                        Select Icon: {categoryIcon && `(Selected: ${categoryIcon})`}
-                                    </ThemedText>
-                                    <ScrollView horizontal style={styles.iconsContainer}>
-                                        {availableIcons.map((icon) => (
-                                            <TouchableOpacity
-                                                key={icon}
-                                                style={[
-                                                    styles.iconOption,
-                                                    categoryIcon === icon && styles.iconOptionSelected
-                                                ]}
-                                                onPress={() => {
-                                                    console.log('🎯 User selected icon:', icon);
-                                                    setCategoryIcon(icon);
-                                                }}
-                                            >
-                                                <Feather
-                                                    name={icon as any}
-                                                    size={20}
-                                                    color={categoryIcon === icon ? "#FFFEEA" : "#874E3B"}
-                                                />
-                                                <ThemedText style={[
-                                                    styles.iconText,
-                                                    categoryIcon === icon && styles.iconTextSelected
-                                                ]}>
-                                                    {icon}
-                                                </ThemedText>
-                                            </TouchableOpacity>
-                                        ))}
-                                    </ScrollView>
-                                </ThemedView>
-                            </ThemedView>
+                            </ScrollView>
 
                             <ThemedView style={styles.modalActions}>
                                 <TouchableOpacity
@@ -1698,11 +2241,98 @@ export default function ItemsScreen() {
                         </ThemedView>
                     </ThemedView>
                 </Modal>
+
+                {/* Cup Modal */}
+                <Modal
+                    visible={cupModalVisible}
+                    animationType="slide"
+                    transparent={true}
+                    onRequestClose={closeCupModal}
+                >
+                    <ThemedView style={styles.modalOverlay}>
+                        <ThemedView style={styles.modalContainer}>
+                            <ThemedView style={styles.modalHeader}>
+                                <ThemedText style={styles.modalTitle}>
+                                    {editingCup ? 'Edit Cup' : 'Add New Cup'}
+                                </ThemedText>
+                                <TouchableOpacity
+                                    style={styles.closeButton}
+                                    onPress={closeCupModal}
+                                >
+                                    <Feather name="x" size={20} color="#874E3B" />
+                                </TouchableOpacity>
+                            </ThemedView>
+
+                            <ThemedView style={styles.modalContent}>
+                                <ThemedView style={styles.inputContainer}>
+                                    <ThemedText style={styles.inputLabel}>
+                                        Cup Name:
+                                    </ThemedText>
+                                    <TextInput
+                                        style={styles.stocksInput}
+                                        value={cupName}
+                                        onChangeText={setCupName}
+                                        placeholder="Enter cup name"
+                                        placeholderTextColor="#9CA3AF"
+                                    />
+                                </ThemedView>
+
+                                <ThemedView style={styles.inputContainer}>
+                                    <ThemedText style={styles.inputLabel}>
+                                        Size:
+                                    </ThemedText>
+                                    <TextInput
+                                        style={styles.stocksInput}
+                                        value={cupSize}
+                                        onChangeText={setCupSize}
+                                        placeholder="Enter cup size (e.g., 8oz, 12oz)"
+                                        placeholderTextColor="#9CA3AF"
+                                    />
+                                </ThemedView>
+
+                                <ThemedView style={styles.inputContainer}>
+                                    <ThemedText style={styles.inputLabel}>
+                                        Stocks:
+                                    </ThemedText>
+                                    <TextInput
+                                        style={styles.stocksInput}
+                                        value={cupStocks}
+                                        onChangeText={setCupStocks}
+                                        keyboardType="numeric"
+                                        placeholder="Enter number of stocks"
+                                        placeholderTextColor="#9CA3AF"
+                                    />
+                                </ThemedView>
+                            </ThemedView>
+
+                            <ThemedView style={styles.modalActions}>
+                                <TouchableOpacity
+                                    style={styles.cancelModalButton}
+                                    onPress={closeCupModal}
+                                >
+                                    <ThemedText style={styles.cancelModalButtonText}>
+                                        Cancel
+                                    </ThemedText>
+                                </TouchableOpacity>
+
+                                <TouchableOpacity
+                                    style={styles.saveModalButton}
+                                    onPress={saveCup}
+                                >
+                                    <ThemedText style={styles.saveModalButtonText}>
+                                        {editingCup ? 'Update Cup' : 'Add Cup'}
+                                    </ThemedText>
+                                </TouchableOpacity>
+                            </ThemedView>
+                        </ThemedView>
+                    </ThemedView>
+                </Modal>
             </ImageBackground>
         </ThemedView>
     );
 }
 
+// Styles remain exactly the same as in your original file...
 const styles = StyleSheet.create({
     container: {
         flex: 1,
@@ -1973,6 +2603,23 @@ const styles = StyleSheet.create({
         flex: 2,
         textAlign: 'left',
         paddingLeft: 8,
+    },
+    // Add these to your styles:
+    modalContentScroll: {
+        maxHeight: 400, // Limit height to prevent modal from being too tall
+    },
+    modalContent: {
+        padding: 20,
+    },
+    textInput: {
+        backgroundColor: '#FFFFFF',
+        borderWidth: 2,
+        borderColor: '#D4A574',
+        borderRadius: 8,
+        paddingHorizontal: 12,
+        paddingVertical: 12,
+        fontSize: 16,
+        color: '#5A3921',
     },
     categoryItemsHeader: {
         flex: 1.5,
@@ -2310,6 +2957,7 @@ const styles = StyleSheet.create({
     emptyContainer: {
         padding: 20,
         alignItems: 'center',
+        backgroundColor: 'transparent',
     },
 
     // Modal Styles
@@ -2364,9 +3012,7 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: '#D4A574',
     },
-    modalContent: {
-        padding: 20,
-    },
+
     inputContainer: {
         marginTop: 16,
     },

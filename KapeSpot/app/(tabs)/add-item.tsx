@@ -1,5 +1,5 @@
 // app/(tabs)/add-item.tsx
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
     StyleSheet,
     ScrollView,
@@ -9,6 +9,8 @@ import {
     Alert,
     Image,
     StatusBar,
+    KeyboardAvoidingView,
+    Platform,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { ThemedText } from '@/components/themed-text';
@@ -19,6 +21,8 @@ import { router } from 'expo-router';
 import { NetworkScanner } from '@/lib/network-scanner';
 import { OfflineSyncService } from '@/lib/offline-sync';
 import * as NavigationBar from 'expo-navigation-bar';
+import { useFocusEffect } from '@react-navigation/native';
+import React from 'react';
 import {
     getFirestore,
     collection,
@@ -32,6 +36,14 @@ import { app } from '@/lib/firebase-config';
 interface Category {
     id: string;
     name: string;
+    firebaseId?: string;
+}
+interface Cup {
+    id: string;
+    name: string;
+    size?: string;
+    stocks: number;
+    isOffline?: boolean;
     firebaseId?: string;
 }
 
@@ -78,16 +90,31 @@ export default function AddItemScreen() {
     const [loading, setLoading] = useState(false);
     const [categories, setCategories] = useState<Category[]>([]);
     const [isOnlineMode, setIsOnlineMode] = useState<boolean>(false);
+    const [cups, setCups] = useState<Cup[]>([]); // ADD CUP STATE
+
+
+    // Refs for auto-scrolling
+    const scrollViewRef = useRef<ScrollView>(null);
+    const nameInputRef = useRef<TextInput>(null);
+    const codeInputRef = useRef<TextInput>(null);
+    const priceInputRef = useRef<TextInput>(null);
+    const stocksInputRef = useRef<TextInput>(null);
+    const categoryInputRef = useRef<TextInput>(null);
+    const descriptionInputRef = useRef<TextInput>(null);
+    const [selectedCup, setSelectedCup] = useState<string>('');
 
     // New item form state
+    // New item form state - ADD CUP FIELD
     const [newItem, setNewItem] = useState({
         name: '',
         code: '',
         price: '',
         category: '',
         stocks: '',
-        description: ''
+        description: '',
+        cupName: '' // ADD CUP NAME FIELD
     });
+
 
     const [imageUri, setImageUri] = useState<string | null>(null);
     const [imageBase64, setImageBase64] = useState<string | null>(null);
@@ -278,6 +305,19 @@ export default function AddItemScreen() {
         }
     };
 
+    // Function to handle input focus with auto-scroll
+    const handleInputFocus = (inputName: string, yOffset: number = 0) => {
+        hideAllBars();
+
+        // Scroll to make the input visible
+        setTimeout(() => {
+            scrollViewRef.current?.scrollTo({
+                y: yOffset,
+                animated: true
+            });
+        }, 100);
+    };
+
     // Open camera to capture an image
     const handleCapture = async () => {
         try {
@@ -389,6 +429,7 @@ export default function AddItemScreen() {
     };
 
     // Save item to Firebase Firestore with image as base64
+    // Save item to Firebase Firestore with image as base64 - FIXED
     const handleSaveItem = async () => {
         hideAllBars(); // Ensure ALL bars are hidden when saving
 
@@ -408,6 +449,7 @@ export default function AddItemScreen() {
             const syncService = OfflineSyncService.getInstance();
             const connectionMode = await getConnectionMode();
 
+            // In handleSaveItem function, update the itemData to include cupName:
             const itemData: any = {
                 name: newItem.name,
                 code: newItem.code,
@@ -415,6 +457,7 @@ export default function AddItemScreen() {
                 category: newItem.category,
                 stocks: parseInt(newItem.stocks) || 0,
                 description: newItem.description,
+                cupName: newItem.cupName, // ADD THIS LINE
                 status: true,
                 sales: 0,
                 created_at: new Date().toISOString(),
@@ -431,67 +474,83 @@ export default function AddItemScreen() {
             console.log('🚀 Starting item save process...');
             console.log('🌐 Current Mode:', connectionMode === 'offline' ? 'OFFLINE' : 'ONLINE');
 
-            // STEP 1: ALWAYS SAVE TO LOCAL STORAGE FIRST
-            console.log('💾 Step 1: Saving to LOCAL storage...');
-            const localResult = await syncService.saveItem(itemData, connectionMode === 'offline');
-
-            if (!localResult.success) {
-                console.error('❌ Failed to save item to local storage');
-                Alert.alert('Error', 'Failed to save item to local storage. Please try again.');
-                return;
-            }
-
-            console.log('✅ Step 1 COMPLETE: Saved to LOCAL storage:', {
-                id: localResult.id,
-                name: itemData.name,
-                isOffline: localResult.isOffline
-            });
-
-            // STEP 2: TRY TO SAVE TO FIREBASE IF ONLINE
             if (connectionMode === 'online') {
-                console.log('🔥 Step 2: Attempting to save to FIREBASE...');
+                console.log('🔥 ONLINE MODE: Saving to Firebase first...');
 
                 try {
-                    // Save item to Firebase Firestore
+                    // STEP 1: SAVE TO FIREBASE FIRST
                     const docRef = await addDoc(collection(db, 'items'), itemData);
                     const firebaseId = docRef.id;
 
-                    console.log('✅ Step 2 COMPLETE: Saved to FIREBASE successfully:', {
+                    console.log('✅ Step 1 COMPLETE: Saved to FIREBASE successfully:', {
                         firebaseId: firebaseId,
-                        name: itemData.name,
-                        hasImage: !!imageBase64
+                        name: itemData.name
                     });
 
-                    // STEP 3: UPDATE LOCAL STORAGE WITH FIREBASE INFO
-                    console.log('🔄 Step 3: Updating local record with Firebase info...');
-                    const updatedItemData = {
+                    // STEP 2: THEN SAVE TO LOCAL STORAGE WITH FIREBASE INFO
+                    console.log('💾 Step 2: Saving to LOCAL storage with Firebase info...');
+                    const itemWithFirebaseId = {
                         ...itemData,
                         id: firebaseId,
-                        firebaseId: firebaseId
+                        firebaseId: firebaseId,
+                        isOffline: false
                     };
 
-                    await syncService.saveItem(updatedItemData, false);
+                    const localResult = await syncService.saveItem(itemWithFirebaseId, true);
 
-                    console.log('✅ Step 3 COMPLETE: Local record updated with Firebase ID');
+                    if (localResult.success) {
+                        console.log('✅ Step 2 COMPLETE: Saved to LOCAL storage with Firebase ID');
 
-                    // SUCCESS - Item saved to both local and Firebase
-                    Alert.alert('Success', 'Item saved to Firebase and local backup!', [
-                        {
-                            text: 'OK',
-                            onPress: () => {
-                                router.back();
-                                router.replace('/items');
+                        Alert.alert('Success', 'Item saved to Firebase and local backup!', [
+                            {
+                                text: 'OK',
+                                onPress: () => {
+                                    router.back();
+                                    router.replace('/items');
+                                }
                             }
-                        }
-                    ]);
-
-                    console.log('🎉 ITEM SAVE PROCESS COMPLETED: Saved to BOTH LOCAL AND FIREBASE!');
+                        ]);
+                    } else {
+                        console.log('⚠️ Firebase saved but local backup failed');
+                        Alert.alert('Success', 'Item saved to Firebase!', [
+                            {
+                                text: 'OK',
+                                onPress: () => {
+                                    router.back();
+                                    router.replace('/items');
+                                }
+                            }
+                        ]);
+                    }
 
                 } catch (firebaseError) {
                     console.error('❌ Firebase save error:', firebaseError);
 
-                    // Firebase save failed, but local save was successful
-                    Alert.alert('Saved Locally', 'Item saved to local storage. Firebase sync will be retried later.', [
+                    // Firebase failed, save to local storage only
+                    console.log('💾 Fallback: Saving to LOCAL storage only...');
+                    const localResult = await syncService.saveItem(itemData, false);
+
+                    if (localResult.success) {
+                        Alert.alert('Saved Locally', 'Item saved to local storage. Firebase sync will be retried later.', [
+                            {
+                                text: 'OK',
+                                onPress: () => {
+                                    router.back();
+                                    router.replace('/items');
+                                }
+                            }
+                        ]);
+                    } else {
+                        Alert.alert('Error', 'Failed to save item. Please try again.');
+                    }
+                }
+            } else {
+                // OFFLINE MODE - Save to local storage only
+                console.log('📱 OFFLINE MODE: Saving to LOCAL storage only...');
+                const localResult = await syncService.saveItem(itemData, false);
+
+                if (localResult.success) {
+                    Alert.alert('Success (Offline)', 'Item saved to local storage. Will sync when online.', [
                         {
                             text: 'OK',
                             onPress: () => {
@@ -500,20 +559,9 @@ export default function AddItemScreen() {
                             }
                         }
                     ]);
+                } else {
+                    Alert.alert('Error', 'Failed to save item to local storage. Please try again.');
                 }
-            } else {
-                // OFFLINE MODE - Only local save was successful
-                console.log('📱 Step 2: Offline mode - Only saved to LOCAL storage');
-
-                Alert.alert('Success (Offline)', 'Item saved to local storage. Will sync when online.', [
-                    {
-                        text: 'OK',
-                        onPress: () => {
-                            router.back();
-                            router.replace('/items');
-                        }
-                    }
-                ]);
             }
 
         } catch (error) {
@@ -523,6 +571,53 @@ export default function AddItemScreen() {
             setLoading(false);
         }
     };
+    const loadCups = async () => {
+        try {
+            const syncService = OfflineSyncService.getInstance();
+            const connectionMode = await getConnectionMode();
+
+            if (connectionMode === 'offline') {
+                console.log('📱 Loading cups from local storage (OFFLINE)...');
+                const storedCups = await syncService.getCups();
+                setCups(storedCups);
+                console.log('✅ Loaded cups from local storage:', storedCups.length, 'cups');
+                return;
+            }
+
+            console.log('🔥 Loading cups from Firebase (ONLINE)...');
+            const cupsCollection = collection(db, 'cups');
+            const cupsSnapshot = await getDocs(cupsCollection);
+
+            const firebaseCups: Cup[] = cupsSnapshot.docs.map(doc => {
+                const data = doc.data();
+                return {
+                    id: doc.id,
+                    name: data.name || '',
+                    size: data.size || '',
+                    stocks: data.stocks || 0,
+                    isOffline: false,
+                    firebaseId: doc.id
+                };
+            });
+
+            setCups(firebaseCups);
+            console.log('✅ Loaded cups from Firebase:', firebaseCups.length, 'cups');
+
+        } catch (error) {
+            console.error('❌ Error loading cups:', error);
+            // Fallback to local storage
+            const syncService = OfflineSyncService.getInstance();
+            const storedCups = await syncService.getCups();
+            setCups(storedCups);
+        }
+    };
+
+    // Update useEffect to load cups
+    useEffect(() => {
+        loadCategories();
+        loadCups(); // ADD THIS LINE
+        requestPermissions();
+    }, []);
 
     const handleCancel = () => {
         hideAllBars();
@@ -532,13 +627,70 @@ export default function AddItemScreen() {
             price: '',
             category: '',
             stocks: '',
-            description: ''
+            description: '',
+            cupName: ''
         });
         setImageUri(null);
         setImageBase64(null);
         router.back();
         router.replace('/items');
     };
+    // Add this function to refresh cups list
+    const refreshCups = async () => {
+        try {
+            const syncService = OfflineSyncService.getInstance();
+            const connectionMode = await getConnectionMode();
+
+            if (connectionMode === 'offline') {
+                console.log('📱 Refreshing cups from local storage...');
+                const storedCups = await syncService.getCups();
+                setCups(storedCups);
+                return;
+            }
+
+            console.log('🔥 Refreshing cups from Firebase...');
+            const cupsCollection = collection(db, 'cups');
+            const cupsSnapshot = await getDocs(cupsCollection);
+
+            const firebaseCups: Cup[] = cupsSnapshot.docs.map(doc => {
+                const data = doc.data();
+                return {
+                    id: doc.id,
+                    name: data.name || '',
+                    size: data.size || '',
+                    stocks: data.stocks || 0,
+                    isOffline: false,
+                    firebaseId: doc.id
+                };
+            });
+
+            setCups(firebaseCups);
+
+            // Also update local storage for offline use
+            await syncService.saveCups(firebaseCups);
+
+        } catch (error) {
+            console.error('❌ Error refreshing cups:', error);
+            // Fallback to local storage
+            const syncService = OfflineSyncService.getInstance();
+            const storedCups = await syncService.getCups();
+            setCups(storedCups);
+        }
+    };
+
+    // Update useEffect to include focus listener for real-time updates
+    useEffect(() => {
+        loadCategories();
+        loadCups();
+        requestPermissions();
+    }, []);
+
+    // Add focus effect to refresh cups when screen comes into focus
+    useFocusEffect(
+        React.useCallback(() => {
+            refreshCups();
+        }, [])
+    );
 
     return (
         <ThemedView style={styles.container}>
@@ -551,7 +703,10 @@ export default function AddItemScreen() {
                 style={styles.backgroundImage}
                 resizeMode="cover"
             >
-                <ThemedView style={styles.content}>
+                <KeyboardAvoidingView
+                    style={styles.content}
+                    behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                >
                     {/* Header Section */}
                     <ThemedView style={styles.headerSection}>
                         <TouchableOpacity
@@ -575,31 +730,109 @@ export default function AddItemScreen() {
                     </ThemedView>
 
                     {/* Form Content */}
-                    <ScrollView style={styles.formContainer}>
+                    <ScrollView
+                        ref={scrollViewRef}
+                        style={styles.formContainer}
+                        showsVerticalScrollIndicator={true}
+                        contentContainerStyle={styles.scrollContent}
+                    >
                         <ThemedView style={styles.formContent}>
                             {/* Left Side - Form */}
                             <ThemedView style={styles.formSection}>
                                 <ThemedText style={styles.sectionHeader}>Item Details</ThemedText>
 
                                 <ThemedView style={styles.formRow}>
+                                    {/* Cup Type Field */}
+                                    {/* Cup Type Field */}
+
+                                    <ThemedView style={styles.formGroup}>
+                                        <ThemedText style={styles.label}>Cup Type *</ThemedText>
+
+                                        {/* Cup Selection */}
+                                        <ThemedView style={styles.cupSelectionContainer}>
+                                            {cups.length > 0 ? (
+                                                <ScrollView
+                                                    horizontal
+                                                    showsHorizontalScrollIndicator={false}
+                                                    style={styles.cupScrollView}
+                                                >
+                                                    {cups.map((cup) => (
+                                                        <TouchableOpacity
+                                                            key={cup.id}
+                                                            style={[
+                                                                styles.cupOption,
+                                                                newItem.cupName === cup.name && styles.cupOptionSelected
+                                                            ]}
+                                                            onPress={() => {
+                                                                setNewItem(prev => ({
+                                                                    ...prev,
+                                                                    cupName: cup.name,
+                                                                    // Auto-fill item name with cup name if empty
+                                                                    name: prev.name === '' ? `${cup.name} ${prev.code || ''}`.trim() : prev.name
+                                                                }));
+                                                                console.log('🥤 Selected cup:', cup.name, 'Stocks:', cup.stocks);
+                                                            }}
+                                                        >
+                                                            <ThemedView style={styles.cupOptionContent}>
+                                                                <ThemedText style={[
+                                                                    styles.cupOptionText,
+                                                                    newItem.cupName === cup.name && styles.cupOptionTextSelected
+                                                                ]}>
+                                                                    {cup.name}
+                                                                </ThemedText>
+                                                                {cup.size && (
+                                                                    <ThemedText style={[
+                                                                        styles.cupSizeText,
+                                                                        newItem.cupName === cup.name && styles.cupSizeTextSelected
+                                                                    ]}>
+                                                                        {cup.size}
+                                                                    </ThemedText>
+                                                                )}
+                                                                <ThemedText style={styles.cupStockText}>
+                                                                    Stock: {cup.stocks}
+                                                                </ThemedText>
+                                                            </ThemedView>
+                                                        </TouchableOpacity>
+                                                    ))}
+                                                </ScrollView>
+                                            ) : (
+                                                <ThemedText style={styles.noCupsText}>
+                                                    No cups available. Please add cups first.
+                                                </ThemedText>
+                                            )}
+                                        </ThemedView>
+
+                                        {/* Show selected cup info */}
+                                        {newItem.cupName && (
+                                            <ThemedView style={styles.selectedCupInfo}>
+                                                <ThemedText style={styles.selectedCupText}>
+                                                    Selected: {newItem.cupName}
+                                                </ThemedText>
+                                            </ThemedView>
+                                        )}
+                                    </ThemedView>
                                     <ThemedView style={styles.formGroup}>
                                         <ThemedText style={styles.label}>Item Name *</ThemedText>
                                         <TextInput
+                                            ref={nameInputRef}
                                             style={styles.input}
                                             value={newItem.name}
                                             onChangeText={(text) => setNewItem(prev => ({ ...prev, name: text }))}
                                             placeholder="Enter item name"
-                                            onFocus={hideAllBars}
+                                            onFocus={() => handleInputFocus('name', 0)}
+                                            returnKeyType="next"
                                         />
                                     </ThemedView>
                                     <ThemedView style={styles.formGroup}>
                                         <ThemedText style={styles.label}>Item Code *</ThemedText>
                                         <TextInput
+                                            ref={codeInputRef}
                                             style={styles.input}
                                             value={newItem.code}
                                             onChangeText={(text) => setNewItem(prev => ({ ...prev, code: text }))}
                                             placeholder="Enter item code"
-                                            onFocus={hideAllBars}
+                                            onFocus={() => handleInputFocus('code', 50)}
+                                            returnKeyType="next"
                                         />
                                     </ThemedView>
                                 </ThemedView>
@@ -608,23 +841,27 @@ export default function AddItemScreen() {
                                     <ThemedView style={styles.formGroup}>
                                         <ThemedText style={styles.label}>Item Price *</ThemedText>
                                         <TextInput
+                                            ref={priceInputRef}
                                             style={styles.input}
                                             value={newItem.price}
                                             onChangeText={(text) => setNewItem(prev => ({ ...prev, price: text }))}
                                             placeholder="0.00"
                                             keyboardType="decimal-pad"
-                                            onFocus={hideAllBars}
+                                            onFocus={() => handleInputFocus('price', 100)}
+                                            returnKeyType="next"
                                         />
                                     </ThemedView>
                                     <ThemedView style={styles.formGroup}>
                                         <ThemedText style={styles.label}>Stocks</ThemedText>
                                         <TextInput
+                                            ref={stocksInputRef}
                                             style={styles.input}
                                             value={newItem.stocks}
                                             onChangeText={(text) => setNewItem(prev => ({ ...prev, stocks: text }))}
                                             placeholder="0"
                                             keyboardType="numeric"
-                                            onFocus={hideAllBars}
+                                            onFocus={() => handleInputFocus('stocks', 150)}
+                                            returnKeyType="next"
                                         />
                                     </ThemedView>
                                 </ThemedView>
@@ -633,11 +870,13 @@ export default function AddItemScreen() {
                                     <ThemedText style={styles.label}>Category *</ThemedText>
                                     <ThemedView style={styles.categoryInput}>
                                         <TextInput
+                                            ref={categoryInputRef}
                                             style={styles.input}
                                             value={newItem.category}
                                             onChangeText={(text) => setNewItem(prev => ({ ...prev, category: text }))}
                                             placeholder="Select or enter category"
-                                            onFocus={hideAllBars}
+                                            onFocus={() => handleInputFocus('category', 200)}
+                                            returnKeyType="next"
                                         />
                                         <Feather name="chevron-down" size={20} color="#874E3B" />
                                     </ThemedView>
@@ -651,13 +890,15 @@ export default function AddItemScreen() {
                                 <ThemedView style={styles.formGroup}>
                                     <ThemedText style={styles.label}>Description</ThemedText>
                                     <TextInput
+                                        ref={descriptionInputRef}
                                         style={[styles.input, styles.textArea]}
                                         value={newItem.description}
                                         onChangeText={(text) => setNewItem(prev => ({ ...prev, description: text }))}
                                         placeholder="Enter item description"
                                         multiline
                                         numberOfLines={3}
-                                        onFocus={hideAllBars}
+                                        onFocus={() => handleInputFocus('description', 250)}
+                                        returnKeyType="done"
                                     />
                                 </ThemedView>
                             </ThemedView>
@@ -705,11 +946,12 @@ export default function AddItemScreen() {
                             </ThemedView>
                         </ThemedView>
                     </ScrollView>
-                </ThemedView>
+                </KeyboardAvoidingView>
             </ImageBackground>
         </ThemedView>
     );
 }
+
 const styles = StyleSheet.create({
     container: {
         flex: 1,
@@ -722,6 +964,12 @@ const styles = StyleSheet.create({
         flex: 1,
         padding: 16,
         backgroundColor: 'transparent',
+    },
+    // Add the missing style to your StyleSheet:
+
+    suggestionContent: {
+        flexDirection: 'row',
+        alignItems: 'center',
     },
     headerSection: {
         backgroundColor: "rgba(255, 254, 234, 0.95)",
@@ -757,6 +1005,9 @@ const styles = StyleSheet.create({
     },
     formContainer: {
         flex: 1,
+    },
+    scrollContent: {
+        flexGrow: 1,
     },
     formContent: {
         flexDirection: 'row',
@@ -808,6 +1059,73 @@ const styles = StyleSheet.create({
         fontSize: 14,
         color: '#5A3921',
     },
+    // Add these styles to your StyleSheet:
+
+    cupSelectionContainer: {
+        marginBottom: 8,
+    },
+    cupScrollView: {
+        maxHeight: 120,
+    },
+    cupOption: {
+        backgroundColor: '#F5E6D3',
+        borderWidth: 2,
+        borderColor: '#D4A574',
+        borderRadius: 8,
+        padding: 12,
+        marginRight: 8,
+        minWidth: 100,
+    },
+    cupOptionSelected: {
+        backgroundColor: '#874E3B',
+        borderColor: '#874E3B',
+    },
+    cupOptionContent: {
+        alignItems: 'center',
+    },
+    cupOptionText: {
+        fontSize: 14,
+        fontWeight: 'bold',
+        color: '#874E3B',
+        textAlign: 'center',
+    },
+    cupOptionTextSelected: {
+        color: '#FFFEEA',
+    },
+    cupSizeText: {
+        fontSize: 12,
+        color: '#874E3B',
+        marginTop: 2,
+    },
+    cupSizeTextSelected: {
+        color: '#FFFEEA',
+    },
+    cupStockText: {
+        fontSize: 10,
+        color: '#666',
+        marginTop: 4,
+    },
+    selectedCupInfo: {
+        backgroundColor: '#E8F5E8',
+        padding: 8,
+        borderRadius: 6,
+        marginTop: 8,
+        borderWidth: 1,
+        borderColor: '#4CAF50',
+    },
+    selectedCupText: {
+        fontSize: 12,
+        color: '#2E7D32',
+        fontWeight: 'bold',
+        textAlign: 'center',
+    },
+    noCupsText: {
+        fontSize: 12,
+        color: '#666',
+        fontStyle: 'italic',
+        textAlign: 'center',
+        padding: 12,
+    },
     textArea: {
         height: 80,
         textAlignVertical: 'top',
@@ -824,6 +1142,43 @@ const styles = StyleSheet.create({
     },
     imageUploadArea: {
         alignItems: 'center',
+    },
+    // Add these styles to the StyleSheet:
+
+    cupSuggestions: {
+        marginTop: 8,
+    },
+    suggestionTitle: {
+        fontSize: 12,
+        color: '#874E3B',
+        marginBottom: 6,
+        fontWeight: '500',
+    },
+    suggestionContainer: {
+        flexDirection: 'row',
+    },
+    suggestionChip: {
+        backgroundColor: '#F5E6D3',
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 16,
+        marginRight: 8,
+        marginBottom: 4,
+        borderWidth: 1,
+        borderColor: '#D4A574',
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    suggestionText: {
+        fontSize: 12,
+        color: '#874E3B',
+        fontWeight: '500',
+    },
+    suggestionSize: {
+        fontSize: 10,
+        color: '#874E3B',
+        marginLeft: 4,
+        opacity: 0.8,
     },
     imagePlaceholder: {
         width: 150,

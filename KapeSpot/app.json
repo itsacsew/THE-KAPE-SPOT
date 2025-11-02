@@ -65,8 +65,9 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "37e66e17-ffbe-4e4a-a4d4-002b802fe312"
+        "projectId": "36fee7ce-7c11-4878-87ab-0cd2afca9258"
       }
-    }
+    },
+    "owner": "castillonaccel0412"
   }
 }

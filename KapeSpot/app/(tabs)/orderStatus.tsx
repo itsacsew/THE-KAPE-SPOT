@@ -39,6 +39,8 @@ interface OrderData {
     timestamp: string;
     status: 'unpaid' | 'paid' | 'cancelled';
     firebaseId?: string;
+    orderType?: 'dine-in' | 'take-out'; // ADDED ORDER TYPE
+    cupsUsed?: number;
 }
 
 const { width } = Dimensions.get('window');
@@ -51,6 +53,7 @@ export default function OrderStatusScreen() {
     const [isOnlineMode, setIsOnlineMode] = useState<boolean>(false);
     const [selectedOrder, setSelectedOrder] = useState<OrderData | null>(null);
     const [showActionModal, setShowActionModal] = useState(false);
+    const [selectedOrderType, setSelectedOrderType] = useState<'all' | 'dine-in' | 'take-out'>('all'); // ADDED ORDER TYPE FILTER
 
     // Initialize Firebase
     const db = getFirestore(app);
@@ -108,7 +111,9 @@ export default function OrderStatusScreen() {
                             total: Number(data.total) || 0,
                             timestamp: data.timestamp || data.created_at || new Date().toISOString(),
                             status: data.status || 'unpaid',
-                            firebaseId: doc.id
+                            firebaseId: doc.id,
+                            orderType: data.order_type || data.orderType || 'dine-in', // ADD ORDER TYPE
+                            cupsUsed: data.cups_used || data.cupsUsed || 0
                         };
                     });
 
@@ -147,6 +152,12 @@ export default function OrderStatusScreen() {
             loadOrders();
         }, [])
     );
+
+    // Filter orders based on selected order type
+    const filteredOrders = orders.filter(order => {
+        if (selectedOrderType === 'all') return true;
+        return order.orderType === selectedOrderType;
+    });
 
     const updateOrderStatus = async (orderId: string, newStatus: 'paid' | 'cancelled') => {
         try {
@@ -235,6 +246,22 @@ export default function OrderStatusScreen() {
         return items.length > 0 ? items[0].name : 'No items';
     };
 
+    const getOrderTypeIcon = (orderType?: string) => {
+        switch (orderType) {
+            case 'dine-in': return 'coffee';
+            case 'take-out': return 'shopping-bag';
+            default: return 'package';
+        }
+    };
+
+    const getOrderTypeColor = (orderType?: string) => {
+        switch (orderType) {
+            case 'dine-in': return '#874E3B';
+            case 'take-out': return '#D4A574';
+            default: return '#8B7355';
+        }
+    };
+
     return (
         <ThemedView style={styles.container}>
             <Navbar activeNav="order-status" />
@@ -257,10 +284,59 @@ export default function OrderStatusScreen() {
                                     <Feather name="refresh-cw" size={18} color="#874E3B" />
                                 </TouchableOpacity>
                             </ThemedView>
-
                             <ThemedText style={styles.modeInfo}>
                                 {isOnlineMode ? '🔥 Connected to Firebase - Showing online data' : '📱 Using local storage - Showing local data'}
                             </ThemedText>
+
+                            {/* ORDER TYPE FILTERS */}
+                            <ThemedView style={styles.orderTypeFilters}>
+                                <TouchableOpacity
+                                    style={[
+                                        styles.orderTypeFilterButton,
+                                        selectedOrderType === 'all' && styles.orderTypeFilterButtonActive
+                                    ]}
+                                    onPress={() => setSelectedOrderType('all')}
+                                >
+                                    <ThemedText style={[
+                                        styles.orderTypeFilterText,
+                                        selectedOrderType === 'all' && styles.orderTypeFilterTextActive
+                                    ]}>
+                                        ALL
+                                    </ThemedText>
+                                </TouchableOpacity>
+
+                                <TouchableOpacity
+                                    style={[
+                                        styles.orderTypeFilterButton,
+                                        selectedOrderType === 'dine-in' && styles.orderTypeFilterButtonActive
+                                    ]}
+                                    onPress={() => setSelectedOrderType('dine-in')}
+                                >
+                                    <Feather name="coffee" size={14} color={selectedOrderType === 'dine-in' ? '#FFFEEA' : '#874E3B'} />
+                                    <ThemedText style={[
+                                        styles.orderTypeFilterText,
+                                        selectedOrderType === 'dine-in' && styles.orderTypeFilterTextActive
+                                    ]}>
+                                        DINE IN
+                                    </ThemedText>
+                                </TouchableOpacity>
+
+                                <TouchableOpacity
+                                    style={[
+                                        styles.orderTypeFilterButton,
+                                        selectedOrderType === 'take-out' && styles.orderTypeFilterButtonActive
+                                    ]}
+                                    onPress={() => setSelectedOrderType('take-out')}
+                                >
+                                    <Feather name="shopping-bag" size={14} color={selectedOrderType === 'take-out' ? '#FFFEEA' : '#874E3B'} />
+                                    <ThemedText style={[
+                                        styles.orderTypeFilterText,
+                                        selectedOrderType === 'take-out' && styles.orderTypeFilterTextActive
+                                    ]}>
+                                        TAKE OUT
+                                    </ThemedText>
+                                </TouchableOpacity>
+                            </ThemedView>
 
                         </ThemedView>
                     </ThemedView>
@@ -276,16 +352,19 @@ export default function OrderStatusScreen() {
                                 <ThemedView style={styles.loadingContainer}>
                                     <ThemedText>Loading orders...</ThemedText>
                                 </ThemedView>
-                            ) : orders.length === 0 ? (
+                            ) : filteredOrders.length === 0 ? (
                                 <ThemedView style={styles.emptyContainer}>
                                     <Feather name="package" size={48} color="#D4A574" />
                                     <ThemedText style={styles.emptyText}>No orders found</ThemedText>
                                     <ThemedText style={styles.emptySubtext}>
-                                        All orders are paid or no pending orders
+                                        {selectedOrderType === 'all'
+                                            ? 'All orders are paid or no pending orders'
+                                            : `No ${selectedOrderType.replace('-', ' ')} orders found`
+                                        }
                                     </ThemedText>
                                 </ThemedView>
                             ) : (
-                                orders.map((order) => (
+                                filteredOrders.map((order) => (
                                     <TouchableOpacity
                                         key={order.orderId}
                                         style={styles.orderCard}
@@ -301,6 +380,23 @@ export default function OrderStatusScreen() {
                                                     PAID
                                                 </ThemedText>
                                             </ThemedView>
+                                        </ThemedView>
+
+                                        {/* Order Type Indicator */}
+                                        <ThemedView style={styles.orderTypeContainer}>
+                                            <ThemedView style={[
+                                                styles.orderTypeIconContainer,
+                                                { backgroundColor: getOrderTypeColor(order.orderType) }
+                                            ]}>
+                                                <Feather
+                                                    name={getOrderTypeIcon(order.orderType)}
+                                                    size={12}
+                                                    color="#FFFEEA"
+                                                />
+                                            </ThemedView>
+                                            <ThemedText style={styles.orderTypeText}>
+                                                {order.orderType === 'take-out' ? 'TAKE OUT' : 'DINE IN'}
+                                            </ThemedText>
                                         </ThemedView>
 
                                         {/* Customer Name */}
@@ -324,6 +420,16 @@ export default function OrderStatusScreen() {
                                                 </ThemedText>
                                             )}
                                         </ThemedView>
+
+                                        {/* Cups Used (for take-out orders) */}
+                                        {order.orderType === 'take-out' && order.cupsUsed && order.cupsUsed > 0 && (
+                                            <ThemedView style={styles.cupsUsedContainer}>
+                                                <Feather name="coffee" size={10} color="#874E3B" />
+                                                <ThemedText style={styles.cupsUsedText}>
+                                                    {order.cupsUsed} cups
+                                                </ThemedText>
+                                            </ThemedView>
+                                        )}
 
                                         {/* Order Total */}
                                         <ThemedView style={styles.totalSection}>
@@ -358,9 +464,26 @@ export default function OrderStatusScreen() {
                         <ThemedView style={styles.modalOverlay}>
                             <ThemedView style={styles.actionModal}>
                                 <ThemedView style={styles.modalHeader}>
-                                    <ThemedText style={styles.modalTitle}>
-                                        Order #{selectedOrder?.orderId}
-                                    </ThemedText>
+                                    <ThemedView style={styles.modalTitleContainer}>
+                                        <ThemedText style={styles.modalTitle}>
+                                            Order #{selectedOrder?.orderId}
+                                        </ThemedText>
+                                        {selectedOrder?.orderType && (
+                                            <ThemedView style={[
+                                                styles.modalOrderTypeBadge,
+                                                { backgroundColor: getOrderTypeColor(selectedOrder.orderType) }
+                                            ]}>
+                                                <Feather
+                                                    name={getOrderTypeIcon(selectedOrder.orderType)}
+                                                    size={12}
+                                                    color="#FFFEEA"
+                                                />
+                                                <ThemedText style={styles.modalOrderTypeText}>
+                                                    {selectedOrder.orderType === 'take-out' ? 'TAKE OUT' : 'DINE IN'}
+                                                </ThemedText>
+                                            </ThemedView>
+                                        )}
+                                    </ThemedView>
                                     <TouchableOpacity onPress={closeActionModal}>
                                         <Feather name="x" size={24} color="#874E3B" />
                                     </TouchableOpacity>
@@ -380,6 +503,16 @@ export default function OrderStatusScreen() {
                                             {selectedOrder ? formatTime(selectedOrder.timestamp) : ''}
                                         </ThemedText>
                                     </ThemedView>
+
+                                    {/* Cups Used Section for Take Out Orders */}
+                                    {selectedOrder?.orderType === 'take-out' && selectedOrder.cupsUsed && selectedOrder.cupsUsed > 0 && (
+                                        <ThemedView style={styles.cupsSection}>
+                                            <ThemedText style={styles.cupsLabel}>Cups Used:</ThemedText>
+                                            <ThemedText style={styles.cupsInfo}>
+                                                {selectedOrder.cupsUsed}
+                                            </ThemedText>
+                                        </ThemedView>
+                                    )}
 
                                     <ThemedView style={styles.itemsSection}>
                                         <ThemedText style={styles.itemsLabel}>Items:</ThemedText>
@@ -436,9 +569,10 @@ const styles = StyleSheet.create({
     },
     headerContainer: {
         marginBottom: 16,
+
     },
     headerSection: {
-        backgroundColor: "rgba(255, 254, 234, 0.95)",
+        backgroundColor: "#fffecaF2",
         borderRadius: 12,
         padding: 16,
         borderWidth: 1,
@@ -448,24 +582,19 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
-        marginBottom: 8,
+        backgroundColor: '#fffecaF2'
     },
     mainTitle: {
-        fontSize: 28,
+        fontSize: 30,
         color: '#874E3B',
         fontFamily: 'LobsterTwoItalic',
     },
-    subtitle: {
-        fontSize: 12,
-        color: '#874E3B',
-        marginTop: 4,
-        fontStyle: 'italic',
-    },
+
     modeInfo: {
         fontSize: 12,
         color: '#874E3B',
         fontStyle: 'italic',
-        marginTop: 4,
+
     },
     ordersContainer: {
         flex: 1,
@@ -647,11 +776,30 @@ const styles = StyleSheet.create({
         borderBottomWidth: 1,
         borderBottomColor: '#D4A574',
     },
+    modalTitleContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        flex: 1,
+    },
     modalTitle: {
         fontSize: 20,
         fontWeight: 'bold',
         color: '#874E3B',
         fontFamily: 'LobsterTwoRegular',
+        marginRight: 12,
+    },
+    modalOrderTypeBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 8,
+        paddingVertical: 4,
+        borderRadius: 12,
+        gap: 4,
+    },
+    modalOrderTypeText: {
+        color: '#FFFEEA',
+        fontSize: 10,
+        fontWeight: 'bold',
     },
     modalContent: {
         padding: 20,
@@ -670,7 +818,7 @@ const styles = StyleSheet.create({
         color: '#5A3921',
     },
     timeSection: {
-        marginBottom: 20,
+        marginBottom: 16,
     },
     timeLabel: {
         fontSize: 14,
@@ -678,6 +826,19 @@ const styles = StyleSheet.create({
         marginBottom: 4,
     },
     timeInfo: {
+        fontSize: 16,
+        fontWeight: '600',
+        color: '#5A3921',
+    },
+    cupsSection: {
+        marginBottom: 16,
+    },
+    cupsLabel: {
+        fontSize: 14,
+        color: '#8B7355',
+        marginBottom: 4,
+    },
+    cupsInfo: {
         fontSize: 16,
         fontWeight: '600',
         color: '#5A3921',
@@ -752,5 +913,70 @@ const styles = StyleSheet.create({
         fontSize: 14,
         fontWeight: 'bold',
         textAlign: 'center',
+    },
+
+    // ORDER TYPE FILTER STYLES
+    orderTypeFilters: {
+        flexDirection: 'row',
+        gap: 8,
+        justifyContent: 'center',
+        backgroundColor: '#fffecaF2'
+    },
+    orderTypeFilterButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 100,
+        paddingVertical: 8,
+        borderRadius: 20,
+        borderWidth: 1,
+        borderColor: '#D4A574',
+        backgroundColor: '#F5E6D3',
+        gap: 6,
+    },
+    orderTypeFilterButtonActive: {
+        backgroundColor: '#874E3B',
+        borderColor: '#874E3B',
+    },
+    orderTypeFilterText: {
+        fontSize: 12,
+        fontWeight: 'bold',
+        color: '#874E3B',
+    },
+    orderTypeFilterTextActive: {
+        color: '#FFFEEA',
+    },
+
+    // ORDER TYPE INDICATOR STYLES IN CARD
+    orderTypeContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 4,
+        gap: 4,
+    },
+    orderTypeIconContainer: {
+        width: 16,
+        height: 16,
+        borderRadius: 8,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    orderTypeText: {
+        fontSize: 10,
+        fontWeight: 'bold',
+        color: '#874E3B',
+    },
+
+    // CUPS USED STYLES
+    cupsUsedContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginBottom: 4,
+        gap: 4,
+    },
+    cupsUsedText: {
+        fontSize: 9,
+        color: '#874E3B',
+        fontWeight: '500',
     },
 });

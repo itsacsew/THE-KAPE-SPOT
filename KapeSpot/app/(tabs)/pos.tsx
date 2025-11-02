@@ -44,8 +44,7 @@ interface MenuItem {
     firebaseId?: string;
     image_base64?: string;
     sales?: number;
-    cupName?: string; // ADD THIS LINE
-
+    cupName?: string;
 }
 
 interface Category {
@@ -66,9 +65,10 @@ interface ReceiptData {
     timestamp: string;
     status: 'unpaid' | 'paid' | 'cancelled';
     firebaseId?: string;
-    cupsUsed?: number; // ADD THIS LINE
+    cupsUsed?: number;
+    orderType: 'dine-in' | 'take-out';
 }
-// Add these interfaces to pos.tsx
+
 interface CupItem {
     id: string;
     name: string;
@@ -105,9 +105,7 @@ export default function PosScreen() {
     const [isProcessingOrder, setIsProcessingOrder] = useState(false);
     const [spinAnim] = useState(new Animated.Value(0));
     const [cupCount, setCupCount] = useState(0);
-    const [selectedCupItem, setSelectedCupItem] = useState<MenuItem | null>(null);
-
-
+    const [orderType, setOrderType] = useState<'dine-in' | 'take-out' | null>(null);
 
     // Initialize Firebase
     const db = getFirestore(app);
@@ -167,7 +165,7 @@ export default function PosScreen() {
                         status: true,
                         isOffline: true,
                         sales: item.sales || 0,
-                        cupName: item.cupName || '' // ADD THIS LINE
+                        cupName: item.cupName || ''
                     }));
 
                 setMenuItems(posItems);
@@ -198,7 +196,7 @@ export default function PosScreen() {
                     isOffline: false,
                     firebaseId: doc.id,
                     sales: Number(data.sales || 0),
-                    cupName: data.cupName || '' // ADD THIS LINE
+                    cupName: data.cupName || ''
                 };
             });
 
@@ -220,7 +218,7 @@ export default function PosScreen() {
                     status: true,
                     isOffline: true,
                     sales: item.sales || 0,
-                    cupName: item.cupName || '' // ADD THIS LINE
+                    cupName: item.cupName || ''
                 }));
 
             setMenuItems(offlinePosItems);
@@ -322,15 +320,36 @@ export default function PosScreen() {
         }
     };
 
+    // Function to reset everything
+    const resetPOSState = () => {
+        console.log('🔄 Resetting POS state...');
+        setCart([]);
+        setCustomerName('');
+        setCupCount(0);
+        setOrderType(null); // RESET ORDER TYPE
+        setSearchQuery('');
+        setSelectedCategory('All');
+        setShowReceiptModal(false);
+        setCurrentReceipt(null);
+        console.log('✅ POS state reset complete');
+    };
+
     useFocusEffect(
         React.useCallback(() => {
+            console.log('📍 POS Screen focused - loading data and resetting state');
             loadMenuItems();
             loadCategories();
 
+            // RESET STATE WHEN SCREEN GETS FOCUS
+            resetPOSState();
+
             // Clear cart when screen loses focus
             return () => {
-                console.log('🧹 Clearing cart due to navigation...');
-                clearCart();
+                console.log('📍 POS Screen unfocused - clearing cart');
+                // Don't reset order type here, only clear cart
+                setCart([]);
+                setCustomerName('');
+                setCupCount(0);
             };
         }, [])
     );
@@ -344,10 +363,12 @@ export default function PosScreen() {
     const subtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
     const total = subtotal;
 
-    // TANGTANGON ang selectedCupItem state ug confirmCupItemAddition function
-    // I-update ang addToCart function:
-
     const addToCart = (item: MenuItem) => {
+        if (!orderType) {
+            Alert.alert('Select Order Type', 'Please select Dine In or Take Out first!');
+            return;
+        }
+
         const currentStock = menuItems.find(menuItem => menuItem.id === item.id)?.stocks || 0;
         const currentInCart = cart.find(cartItem => cartItem.id === item.id)?.quantity || 0;
 
@@ -356,8 +377,8 @@ export default function PosScreen() {
             return;
         }
 
-        // Check if item requires cup
-        const requiresCup = checkItemRequiresCup(item);
+        // Check if item requires cup - ONLY FOR TAKE OUT ORDERS
+        const requiresCup = orderType === 'take-out' && checkItemRequiresCup(item);
 
         // Update stocks
         setMenuItems(prev => prev.map(menuItem =>
@@ -379,57 +400,20 @@ export default function PosScreen() {
             return [...prev, { ...item, quantity: 1 }];
         });
 
-        // If item requires cup, increment cup count
+        // If item requires cup AND it's take out, increment cup count
         if (requiresCup) {
             setCupCount(prev => prev + 1);
         }
     };
-    const confirmCupItemAddition = () => {
-        if (!selectedCupItem || cupCount === 0) {
-            Alert.alert('Invalid Quantity', 'Please select at least 1 cup');
-            return;
-        }
 
-        const item = selectedCupItem;
-        const currentStock = menuItems.find(menuItem => menuItem.id === item.id)?.stocks || 0;
-
-        if (cupCount > currentStock) {
-            Alert.alert('Out of Stock', `Only ${currentStock} ${item.name} available!`);
-            return;
-        }
-
-        // Update stocks
-        setMenuItems(prev => prev.map(menuItem =>
-            menuItem.id === item.id
-                ? { ...menuItem, stocks: menuItem.stocks - cupCount }
-                : menuItem
-        ));
-
-        // Add to cart
-        setCart(prev => {
-            const existing = prev.find(cartItem => cartItem.id === item.id);
-            if (existing) {
-                return prev.map(cartItem =>
-                    cartItem.id === item.id
-                        ? { ...cartItem, quantity: cartItem.quantity + cupCount }
-                        : cartItem
-                );
-            }
-            return [...prev, { ...item, quantity: cupCount }];
-        });
-
-        // Reset cup selection
-        setSelectedCupItem(null);
-        setCupCount(0);
-    };
     const removeFromCart = (id: string) => {
         const cartItem = cart.find(item => item.id === id);
         const menuItem = menuItems.find(item => item.id === id);
 
         if (cartItem) {
-            const requiresCup = menuItem ? checkItemRequiresCup(menuItem) : false;
+            const requiresCup = menuItem ? (orderType === 'take-out' && checkItemRequiresCup(menuItem)) : false;
 
-            // Update cup count if item requires cup
+            // Update cup count if item requires cup and it's take out
             if (requiresCup) {
                 setCupCount(prev => Math.max(0, prev - cartItem.quantity));
             }
@@ -450,7 +434,7 @@ export default function PosScreen() {
         if (!cartItem || !menuItem) return;
 
         const quantityDifference = newQuantity - cartItem.quantity;
-        const requiresCup = checkItemRequiresCup(menuItem);
+        const requiresCup = orderType === 'take-out' && checkItemRequiresCup(menuItem);
 
         if (newQuantity === 0) {
             removeFromCart(id);
@@ -472,7 +456,7 @@ export default function PosScreen() {
             item.id === id ? { ...item, quantity: newQuantity } : item
         ));
 
-        // Update cup count if item requires cup
+        // Update cup count if item requires cup and it's take out
         if (requiresCup) {
             setCupCount(prev => prev + quantityDifference);
         }
@@ -488,7 +472,22 @@ export default function PosScreen() {
         });
         setCart([]);
         setCustomerName('');
-        setCupCount(0); // Reset cup count when clearing cart
+        setCupCount(0);
+    };
+
+    // Function to reset everything after order completion
+    const resetAfterOrder = () => {
+        console.log('🔄 Resetting after order completion...');
+        setCart([]);
+        setCustomerName('');
+        setCupCount(0);
+        setOrderType(null); // RESET ORDER TYPE
+        setShowReceiptModal(false);
+        setCurrentReceipt(null);
+
+        // Reload menu items to reflect updated stocks
+        loadMenuItems();
+        console.log('✅ Reset after order complete');
     };
 
     // Update item stocks and sales in Firebase
@@ -521,6 +520,11 @@ export default function PosScreen() {
     };
 
     const placeOrder = async () => {
+        if (!orderType) {
+            Alert.alert('Select Order Type', 'Please select Dine In or Take Out first!');
+            return;
+        }
+
         if (cart.length === 0) {
             Alert.alert('Empty Cart', 'Please add items to cart first!');
             return;
@@ -545,12 +549,14 @@ export default function PosScreen() {
                 total: total,
                 timestamp: new Date().toISOString(),
                 status: 'unpaid',
-                cupsUsed: cupCount // ADD THIS LINE
+                cupsUsed: orderType === 'take-out' ? cupCount : 0,
+                orderType: orderType
             };
 
             console.log('🔄 [FIREBASE ORDER] Starting order process...');
             console.log('🌐 Current Mode:', connectionMode === 'offline' ? 'OFFLINE' : 'ONLINE');
             console.log('🥤 Total cups used in this order:', cupCount);
+            console.log('📝 Order Type:', orderType);
 
             // STEP 1: ALWAYS SAVE TO LOCAL STORAGE FIRST
             console.log('💾 Step 1: Saving to LOCAL storage...');
@@ -561,9 +567,9 @@ export default function PosScreen() {
 
             console.log('✅ Step 1 COMPLETE: Saved to LOCAL storage');
 
-            // STEP 2: UPDATE CUP STOCKS (BOTH ONLINE AND OFFLINE)
+            // STEP 2: UPDATE CUP STOCKS (BOTH ONLINE AND OFFLINE) - ONLY FOR TAKE OUT
             console.log('🥤 Step 2: Updating cup stocks...');
-            if (cupCount > 0) {
+            if (orderType === 'take-out' && cupCount > 0) {
                 await updateCupStocksForOrder(cupCount, connectionMode);
             }
 
@@ -588,7 +594,8 @@ export default function PosScreen() {
                         status: receiptData.status,
                         timestamp: receiptData.timestamp,
                         created_at: new Date().toISOString(),
-                        cups_used: cupCount // Track cups used in order
+                        cups_used: cupCount,
+                        order_type: orderType
                     };
 
                     const docRef = await addDoc(collection(db, 'orders'), orderData);
@@ -596,7 +603,8 @@ export default function PosScreen() {
 
                     console.log('✅ Step 3 COMPLETE: Saved to FIREBASE successfully:', {
                         firebaseId: firebaseId,
-                        orderId: receiptData.orderId
+                        orderId: receiptData.orderId,
+                        orderType: orderType
                     });
 
                     // Update receipt data with Firebase ID
@@ -662,7 +670,8 @@ export default function PosScreen() {
                 subtotal: subtotal,
                 total: total,
                 timestamp: new Date().toLocaleString(),
-                status: 'unpaid'
+                status: 'unpaid',
+                orderType: orderType!
             };
             setCurrentReceipt(receiptData);
             setShowReceiptModal(true);
@@ -671,7 +680,7 @@ export default function PosScreen() {
             setIsProcessingOrder(false);
         }
     };
-    // Function to update cup stocks when order is placed
+
     // Function to update cup stocks when order is placed
     const updateCupStocksForOrder = async (cupsUsed: number, connectionMode: 'online' | 'offline') => {
         try {
@@ -702,7 +711,6 @@ export default function PosScreen() {
                 }
 
                 // For simplicity, use the first available cup
-                // You might want to implement more complex logic here
                 const cupToUpdate = firebaseCups[0];
                 const newStocks = Math.max(0, cupToUpdate.stocks - cupsUsed);
 
@@ -797,7 +805,7 @@ export default function PosScreen() {
             Alert.alert('Warning', 'Cup stocks may not have been updated properly.');
         }
     };
-    // Update this function to be more specific:
+
     const checkItemRequiresCup = (item: MenuItem): boolean => {
         return !!item.cupName && item.cupName.trim() !== '' && item.stocks > 0;
     };
@@ -807,12 +815,7 @@ export default function PosScreen() {
 
         setTimeout(() => {
             Alert.alert('Printing Complete', 'Two copies printed successfully!');
-            setShowReceiptModal(false);
-            setCart([]);
-            setCustomerName('');
-
-            // Reload menu items to reflect updated stocks
-            loadMenuItems();
+            resetAfterOrder(); // USE RESET FUNCTION
         }, 2000);
     };
 
@@ -907,10 +910,8 @@ export default function PosScreen() {
                                         {checkItemRequiresCup(item) && (
                                             <ThemedView style={styles.cupIndicator}>
                                                 <Feather name="coffee" size={10} color="#FFFEEA" />
-
                                             </ThemedView>
                                         )}
-                                        {/* Simple Cup Counter - Always show if there are cup items in cart */}
 
                                         <TouchableOpacity
                                             style={[
@@ -997,7 +998,9 @@ export default function PosScreen() {
                                 <ThemedView style={styles.emptyCart}>
                                     <Feather name="shopping-cart" size={36} color="#D4A574" />
                                     <ThemedText style={styles.emptyCartText}>No items in cart</ThemedText>
-                                    <ThemedText style={styles.emptyCartSubText}>Tap on menu items to add them</ThemedText>
+                                    <ThemedText style={styles.emptyCartSubText}>
+                                        {orderType ? 'Tap on menu items to add them' : 'Select order type first'}
+                                    </ThemedText>
                                 </ThemedView>
                             ) : (
                                 cart.map((item, index) => (
@@ -1047,17 +1050,20 @@ export default function PosScreen() {
                         <ThemedView style={styles.actionButtons}>
                             <TouchableOpacity
                                 style={styles.cancelButton}
-                                onPress={clearCart}
+                                onPress={() => {
+                                    clearCart();
+                                    setOrderType(null); // RESET ORDER TYPE ON CANCEL
+                                }}
                                 disabled={loading || isProcessingOrder}
                             >
                                 <ThemedText style={styles.cancelButtonText}>
-                                    {isProcessingOrder ? 'Processing...' : 'Cancel'}
+                                    {isProcessingOrder ? 'Processing...' : 'Cancel & Reset'}
                                 </ThemedText>
                             </TouchableOpacity>
                             <TouchableOpacity
                                 style={[styles.placeOrderButton, (loading || isProcessingOrder) && styles.placeOrderButtonDisabled]}
                                 onPress={placeOrder}
-                                disabled={loading || isProcessingOrder || cart.length === 0}
+                                disabled={loading || isProcessingOrder || cart.length === 0 || !orderType}
                             >
                                 <ThemedText style={styles.placeOrderButtonText}>
                                     {isProcessingOrder ? 'Processing...' : 'Place Order'}
@@ -1067,101 +1073,164 @@ export default function PosScreen() {
                     </ThemedView>
 
                     <ThemedView style={styles.menuSection}>
+                        {/* ORDER TYPE SELECTION - SHOW FIRST */}
+                        {!orderType && (
+                            <ThemedView style={styles.orderTypeContainer}>
+                                <ThemedText style={styles.orderTypeTitle}>
+                                    Select Order Type
+                                </ThemedText>
+                                <ThemedView style={styles.orderTypeButtons}>
+                                    <TouchableOpacity
+                                        style={[styles.orderTypeButton, styles.dineInButton]}
+                                        onPress={() => setOrderType('dine-in')}
+                                    >
+                                        <Feather name="coffee" size={32} color="#FFFEEA" />
+                                        <ThemedText style={styles.orderTypeButtonText}>
+                                            DINE IN
+                                        </ThemedText>
+                                    </TouchableOpacity>
 
-                        <ThemedView style={styles.menuHeader}>
-                            <ThemedView style={styles.searchContainer}>
-                                <Feather name="search" size={18} color="#874E3B" style={styles.searchIcon} />
-                                <TextInput
-                                    style={styles.searchInput}
-                                    placeholder="Search Items"
-                                    value={searchQuery}
-                                    onChangeText={setSearchQuery}
-                                />
-                                <TouchableOpacity
-                                    style={styles.reloadButton}
-                                    onPress={() => {
-                                        loadMenuItems();
-                                        loadCategories();
-                                    }}
-                                >
-                                    <Feather name="refresh-cw" size={18} color="#874E3B" />
-                                </TouchableOpacity>
-                            </ThemedView>
-
-                            {/* Simple Cup Counter - Always show if there are cup items in cart */}
-                            {cupCount > 0 && (
-                                <ThemedView style={styles.cupCounterContainer}>
-                                    <Feather name="coffee" size={16} color="#874E3B" />
-                                    <ThemedText style={styles.cupCounterLabel}>
-                                        Total Cups: {cupCount}
-                                    </ThemedText>
+                                    <TouchableOpacity
+                                        style={[styles.orderTypeButton, styles.takeOutButton]}
+                                        onPress={() => setOrderType('take-out')}
+                                    >
+                                        <Feather name="shopping-bag" size={32} color="#FFFEEA" />
+                                        <ThemedText style={styles.orderTypeButtonText}>
+                                            TAKE OUT
+                                        </ThemedText>
+                                    </TouchableOpacity>
                                 </ThemedView>
-                            )}
-                        </ThemedView>
+                            </ThemedView>
+                        )}
 
-                        <ScrollView
-                            horizontal
-                            showsHorizontalScrollIndicator={false}
-                            style={styles.categoriesContainer}
-                            contentContainerStyle={styles.categoriesContent}
-                        >
-                            {categories.map((category, index) => (
-                                <TouchableOpacity
-                                    key={`${category.id}-${index}`}
-                                    style={[
-                                        styles.categoryCard,
-                                        selectedCategory === category.name && styles.categoryCardActive
-                                    ]}
-                                    onPress={() => setSelectedCategory(category.name)}
-                                >
-                                    {category.id !== 'all' && (
+                        {/* MENU HEADER - SHOW ONLY AFTER ORDER TYPE SELECTION */}
+                        {orderType && (
+                            <>
+                                <ThemedView style={styles.menuHeader}>
+                                    {/* Order Type Indicator */}
+                                    <ThemedView style={styles.orderTypeIndicator}>
+                                        <ThemedText style={styles.orderTypeLabel}>
+                                            Order Type:
+                                        </ThemedText>
                                         <ThemedView style={[
-                                            styles.categoryModeIndicator,
-                                            category.isOffline ? styles.sentMode : styles.deliveredMode
+                                            styles.orderTypeBadge,
+                                            orderType === 'dine-in' ? styles.dineInBadge : styles.takeOutBadge
                                         ]}>
                                             <Feather
-                                                name="check"
-                                                size={8}
-                                                color={category.isOffline ? "#666" : "#FFF"}
+                                                name={orderType === 'dine-in' ? "coffee" : "shopping-bag"}
+                                                size={14}
+                                                color="#FFFEEA"
                                             />
-                                            {!category.isOffline && (
-                                                <Feather
-                                                    name="check"
-                                                    size={8}
-                                                    color="#FFF"
-                                                    style={styles.deliveredCheck}
-                                                />
-                                            )}
+                                            <ThemedText style={styles.orderTypeBadgeText}>
+                                                {orderType === 'dine-in' ? 'DINE IN' : 'TAKE OUT'}
+                                            </ThemedText>
+                                            <TouchableOpacity
+                                                onPress={() => {
+                                                    setOrderType(null);
+                                                    clearCart();
+                                                }}
+                                                style={styles.changeOrderTypeButton}
+                                            >
+                                                <Feather name="edit" size={12} color="#FFFEEA" />
+                                            </TouchableOpacity>
+                                        </ThemedView>
+                                    </ThemedView>
+
+                                    <ThemedView style={styles.searchContainer}>
+                                        <Feather name="search" size={18} color="#874E3B" style={styles.searchIcon} />
+                                        <TextInput
+                                            style={styles.searchInput}
+                                            placeholder="Search Items"
+                                            value={searchQuery}
+                                            onChangeText={setSearchQuery}
+                                        />
+                                        <TouchableOpacity
+                                            style={styles.reloadButton}
+                                            onPress={() => {
+                                                loadMenuItems();
+                                                loadCategories();
+                                            }}
+                                        >
+                                            <Feather name="refresh-cw" size={18} color="#874E3B" />
+                                        </TouchableOpacity>
+                                    </ThemedView>
+
+                                    {/* Simple Cup Counter - Only show for take-out orders */}
+                                    {orderType === 'take-out' && cupCount > 0 && (
+                                        <ThemedView style={styles.cupCounterContainer}>
+                                            <Feather name="coffee" size={16} color="#874E3B" />
+                                            <ThemedText style={styles.cupCounterLabel}>
+                                                Total Cups: {cupCount}
+                                            </ThemedText>
                                         </ThemedView>
                                     )}
+                                </ThemedView>
 
-                                    <Feather
-                                        name={(category.icon || 'folder') as any}
-                                        size={32}
-                                        color={selectedCategory === category.name ? '#FFFEEA' : '#874E3B'}
-                                        style={styles.categoryIcon}
-                                    />
-                                    <ThemedText style={[
-                                        styles.categoryName,
-                                        selectedCategory === category.name && styles.categoryNameActive
-                                    ]}>
-                                        {category.name}
-                                    </ThemedText>
-                                    {category.items_count !== undefined && category.items_count > 0 && category.id !== 'all' && (
-                                        <ThemedText style={[
-                                            styles.categoryCount,
-                                            selectedCategory === category.name && styles.categoryCountActive
-                                        ]}>
-                                            {category.items_count}
-                                        </ThemedText>
-                                    )}
-                                </TouchableOpacity>
-                            ))}
-                        </ScrollView>
+                                <ScrollView
+                                    horizontal
+                                    showsHorizontalScrollIndicator={false}
+                                    style={styles.categoriesContainer}
+                                    contentContainerStyle={styles.categoriesContent}
+                                >
+                                    {categories.map((category, index) => (
+                                        <TouchableOpacity
+                                            key={`${category.id}-${index}`}
+                                            style={[
+                                                styles.categoryCard,
+                                                selectedCategory === category.name && styles.categoryCardActive
+                                            ]}
+                                            onPress={() => setSelectedCategory(category.name)}
+                                        >
+                                            {category.id !== 'all' && (
+                                                <ThemedView style={[
+                                                    styles.categoryModeIndicator,
+                                                    category.isOffline ? styles.sentMode : styles.deliveredMode
+                                                ]}>
+                                                    <Feather
+                                                        name="check"
+                                                        size={8}
+                                                        color={category.isOffline ? "#666" : "#FFF"}
+                                                    />
+                                                    {!category.isOffline && (
+                                                        <Feather
+                                                            name="check"
+                                                            size={8}
+                                                            color="#FFF"
+                                                            style={styles.deliveredCheck}
+                                                        />
+                                                    )}
+                                                </ThemedView>
+                                            )}
 
-                        <ScrollView style={styles.menuList}>
-                            {renderMenuItems()}
-                        </ScrollView>
+                                            <Feather
+                                                name={(category.icon || 'folder') as any}
+                                                size={32}
+                                                color={selectedCategory === category.name ? '#FFFEEA' : '#874E3B'}
+                                                style={styles.categoryIcon}
+                                            />
+                                            <ThemedText style={[
+                                                styles.categoryName,
+                                                selectedCategory === category.name && styles.categoryNameActive
+                                            ]}>
+                                                {category.name}
+                                            </ThemedText>
+                                            {category.items_count !== undefined && category.items_count > 0 && category.id !== 'all' && (
+                                                <ThemedText style={[
+                                                    styles.categoryCount,
+                                                    selectedCategory === category.name && styles.categoryCountActive
+                                                ]}>
+                                                    {category.items_count}
+                                                </ThemedText>
+                                            )}
+                                        </TouchableOpacity>
+                                    ))}
+                                </ScrollView>
+
+                                <ScrollView style={styles.menuList}>
+                                    {renderMenuItems()}
+                                </ScrollView>
+                            </>
+                        )}
                     </ThemedView>
                 </ThemedView>
             </ImageBackground>
@@ -1187,6 +1256,9 @@ export default function PosScreen() {
                         <ThemedView style={styles.receiptHeader}>
                             <ThemedText style={styles.receiptTitle}>KapeSpot</ThemedText>
                             <ThemedText style={styles.receiptSubtitle}>Order Receipt</ThemedText>
+                            <ThemedText style={styles.receiptOrderType}>
+                                {currentReceipt.orderType === 'dine-in' ? 'DINE IN' : 'TAKE OUT'}
+                            </ThemedText>
                         </ThemedView>
 
                         <ThemedView style={styles.receiptSection}>
@@ -1226,13 +1298,24 @@ export default function PosScreen() {
                             <ThemedText style={styles.totalAmount}>₱{currentReceipt.total.toFixed(2)}</ThemedText>
                         </ThemedView>
 
+                        {currentReceipt.orderType === 'take-out' && currentReceipt.cupsUsed && currentReceipt.cupsUsed > 0 && (
+                            <ThemedView style={styles.cupsUsedSection}>
+                                <ThemedText style={styles.cupsUsedText}>
+                                    Cups Used: {currentReceipt.cupsUsed}
+                                </ThemedText>
+                            </ThemedView>
+                        )}
+
                         <ThemedView style={styles.receiptActions}>
                             <TouchableOpacity style={styles.printButton} onPress={handlePrintReceipt}>
                                 <ThemedText style={styles.printButtonText}>Print Receipt (2 Copies)</ThemedText>
                             </TouchableOpacity>
                             <TouchableOpacity
                                 style={styles.cancelReceiptButton}
-                                onPress={() => setShowReceiptModal(false)}
+                                onPress={() => {
+                                    setShowReceiptModal(false);
+                                    resetAfterOrder(); // RESET AFTER CLOSING RECEIPT
+                                }}
                             >
                                 <ThemedText style={styles.cancelReceiptButtonText}>Close</ThemedText>
                             </TouchableOpacity>
@@ -1244,6 +1327,8 @@ export default function PosScreen() {
     );
 }
 
+
+// ... (styles remain the same as previous version)
 const styles = StyleSheet.create({
     container: {
         flex: 1,
@@ -1586,9 +1671,6 @@ const styles = StyleSheet.create({
         borderRadius: 10,
         overflow: 'hidden',
     },
-    // Add these styles to your StyleSheet:
-
-    // Cup Counter Styles
     cupCounterContainer: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -1629,8 +1711,6 @@ const styles = StyleSheet.create({
         minWidth: 20,
         textAlign: 'center',
     },
-
-    // Cup Indicator Styles
     cupIndicator: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -1648,8 +1728,6 @@ const styles = StyleSheet.create({
         marginLeft: 2,
         fontWeight: 'bold',
     },
-
-    // Cup Confirmation Modal Styles (optional - if you want a confirmation)
     cupConfirmationModal: {
         position: 'absolute',
         top: 0,
@@ -1819,8 +1897,6 @@ const styles = StyleSheet.create({
         paddingVertical: 60,
         backgroundColor: 'transparent',
     },
-    // Add these styles to your StyleSheet:
-
     confirmCupButton: {
         backgroundColor: '#874E3B',
         paddingHorizontal: 12,
@@ -1952,6 +2028,18 @@ const styles = StyleSheet.create({
         color: '#5A3921',
         marginTop: 4,
     },
+    receiptOrderType: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#874E3B',
+        marginTop: 8,
+        paddingHorizontal: 12,
+        paddingVertical: 4,
+        backgroundColor: '#F5E6D3',
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#D4A574',
+    },
     receiptSection: {
         marginBottom: 12,
     },
@@ -2026,6 +2114,20 @@ const styles = StyleSheet.create({
         fontWeight: 'bold',
         color: '#874E3B',
     },
+    cupsUsedSection: {
+        alignItems: 'center',
+        marginTop: 8,
+        padding: 8,
+        backgroundColor: '#F5E6D3',
+        borderRadius: 6,
+        borderWidth: 1,
+        borderColor: '#D4A574',
+    },
+    cupsUsedText: {
+        fontSize: 14,
+        color: '#874E3B',
+        fontWeight: 'bold',
+    },
     receiptActions: {
         marginTop: 20,
         gap: 12,
@@ -2054,7 +2156,6 @@ const styles = StyleSheet.create({
         fontSize: 14,
         fontWeight: 'bold',
     },
-    // NEW PROCESSING STYLES
     processingOverlay: {
         position: 'absolute',
         top: 0,
@@ -2094,5 +2195,91 @@ const styles = StyleSheet.create({
         fontSize: 14,
         color: '#5A3921',
         textAlign: 'center',
+    },
+    orderTypeContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        paddingVertical: 40,
+        backgroundColor: '#fffecaF2',
+    },
+    orderTypeTitle: {
+        fontSize: 24,
+        fontFamily: 'LobsterTwoItalic',
+        color: '#874E3B',
+        marginBottom: 30,
+        textAlign: 'center',
+    },
+    orderTypeButtons: {
+        flexDirection: 'row',
+        gap: 20,
+        justifyContent: 'center',
+        alignItems: 'center',
+        backgroundColor: '#fffecaF2',
+    },
+    orderTypeButton: {
+        width: 140,
+        height: 140,
+        borderRadius: 20,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginBottom: 50,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3,
+        shadowRadius: 8,
+        elevation: 8,
+    },
+    dineInButton: {
+        backgroundColor: '#874E3B',
+    },
+    takeOutButton: {
+        backgroundColor: '#D4A574',
+    },
+    orderTypeButtonText: {
+        color: '#FFFEEA',
+        fontSize: 16,
+        fontWeight: 'bold',
+        marginTop: 12,
+        fontFamily: 'LobsterTwoRegular',
+    },
+    orderTypeIndicator: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginBottom: 12,
+        backgroundColor: 'rgba(255, 254, 234, 0.95)',
+        padding: 12,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#D4A574',
+    },
+    orderTypeLabel: {
+        fontSize: 16,
+        color: '#874E3B',
+        fontWeight: '500',
+    },
+    orderTypeBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 20,
+        gap: 6,
+    },
+    dineInBadge: {
+        backgroundColor: '#874E3B',
+    },
+    takeOutBadge: {
+        backgroundColor: '#D4A574',
+    },
+    orderTypeBadgeText: {
+        color: '#FFFEEA',
+        fontSize: 12,
+        fontWeight: 'bold',
+    },
+    changeOrderTypeButton: {
+        marginLeft: 4,
+        padding: 2,
     },
 });

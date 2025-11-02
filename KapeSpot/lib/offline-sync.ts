@@ -28,15 +28,17 @@ interface PendingItem {
 }
 
 interface ReceiptData {
-  orderId: string;
-  customerName: string;
-  items: any[];
-  subtotal: number;
-  total: number;
-  timestamp: string;
-  status: 'unpaid' | 'paid' | 'cancelled';
-  firebaseId?: string;
-}
+    orderId: string;
+    customerName: string;
+    items: any[];
+    subtotal: number;
+    total: number;
+    timestamp: string;
+    status: 'unpaid' | 'paid' | 'cancelled';
+    firebaseId?: string;
+    orderType?: 'dine-in' | 'take-out'; // ADD THIS LINE
+    cupsUsed?: number;
+  }
 // ADD CUPITEM INTERFACE HERE
 interface CupItem {
     id: string;

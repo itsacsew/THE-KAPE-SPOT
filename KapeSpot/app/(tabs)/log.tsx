@@ -7,7 +7,8 @@ import {
     ImageBackground,
     Alert,
     Modal,
-    Dimensions
+    Dimensions,
+    Text
 } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -28,11 +29,20 @@ import {
     doc
 } from 'firebase/firestore';
 import { app } from '@/lib/firebase-config';
+import { getOrderNumberIndicator } from './orderStatus';
+
+interface OrderItem {
+    name: string;
+    quantity: number;
+    price: number;
+    ready?: boolean;
+    cancelled?: boolean;
+}
 
 interface OrderData {
     orderId: string;
     customerName: string;
-    items: any[];
+    items: OrderItem[];
     subtotal: number;
     total: number;
     timestamp: string;
@@ -50,7 +60,9 @@ export default function LogScreen() {
     const [isOnlineMode, setIsOnlineMode] = useState<boolean>(false);
     const [selectedOrder, setSelectedOrder] = useState<OrderData | null>(null);
     const [showOrderModal, setShowOrderModal] = useState(false);
-    const [filter, setFilter] = useState<'all' | 'paid'>('all'); // Remove 'cancelled' from filter
+    const [filter, setFilter] = useState<'all' | 'paid' | 'cancelled'>('all'); // Added 'cancelled' filter
+    const [showItemsModal, setShowItemsModal] = useState(false);
+    const [allItems, setAllItems] = useState<any[]>([]);
 
     // Initialize Firebase
     const db = getFirestore(app);
@@ -67,6 +79,10 @@ export default function LogScreen() {
             return 'offline';
         }
     };
+    const getOrderNumberIndicator = (orders: OrderData[], orderId: string) => {
+        const index = orders.findIndex(order => order.orderId === orderId);
+        return (index + 1).toString().padStart(2, '0');
+    };
 
     const loadOrders = async () => {
         setLoading(true);
@@ -77,21 +93,21 @@ export default function LogScreen() {
             let allOrders: OrderData[] = [];
 
             if (connectionMode === 'offline') {
-                // Load from local storage - PAID ORDERS ONLY
-                console.log('📱 Loading paid orders from local storage...');
+                // Load from local storage - PAID AND CANCELLED ORDERS
+                console.log('📱 Loading orders from local storage...');
                 const localOrders = await syncService.getPendingReceipts();
-                allOrders = localOrders.filter(order => order.status === 'paid'); // Paid only
-                console.log('📱 Local paid orders loaded:', allOrders.length);
+                allOrders = localOrders.filter(order => order.status === 'paid' || order.status === 'cancelled');
+                console.log('📱 Local orders loaded:', allOrders.length);
             } else {
-                // Load from Firebase Firestore - PAID ORDERS ONLY
+                // Load from Firebase Firestore - PAID AND CANCELLED ORDERS
                 try {
-                    console.log('🔥 Loading paid orders from Firebase...');
+                    console.log('🔥 Loading orders from Firebase...');
 
-                    // Query orders collection where status is 'paid' ONLY
+                    // Query orders collection where status is 'paid' OR 'cancelled'
                     const ordersCollection = collection(db, 'orders');
                     const ordersQuery = query(
                         ordersCollection,
-                        where('status', '==', 'paid'), // Paid only
+                        where('status', 'in', ['paid', 'cancelled']), // Both paid and cancelled
                         orderBy('timestamp', 'desc')
                     );
 
@@ -112,33 +128,33 @@ export default function LogScreen() {
                     });
 
                     allOrders = firebaseOrders;
-                    console.log('🔥 Firebase paid orders loaded:', allOrders.length);
+                    console.log('🔥 Firebase orders loaded:', allOrders.length);
 
                 } catch (firebaseError) {
                     console.log('⚠️ Failed to load from Firebase, falling back to local storage:', firebaseError);
 
-                    // Fallback to local storage - PAID ORDERS ONLY
+                    // Fallback to local storage - PAID AND CANCELLED ORDERS
                     const localOrders = await syncService.getPendingReceipts();
-                    allOrders = localOrders.filter(order => order.status === 'paid'); // Paid only
-                    console.log('📱 Fallback to local paid orders:', allOrders.length);
+                    allOrders = localOrders.filter(order => order.status === 'paid' || order.status === 'cancelled');
+                    console.log('📱 Fallback to local orders:', allOrders.length);
                 }
             }
 
             // Sort by timestamp (newest first)
             allOrders.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
             setOrders(allOrders);
-            console.log('✅ Final loaded paid orders:', allOrders.length);
+            console.log('✅ Final loaded orders:', allOrders.length);
 
         } catch (error) {
             console.error('❌ Error loading orders:', error);
-            // Final fallback - try to get from local storage - PAID ORDERS ONLY
+            // Final fallback - try to get from local storage - PAID AND CANCELLED ORDERS
             try {
                 const syncService = OfflineSyncService.getInstance();
                 const localOrders = await syncService.getPendingReceipts();
-                const filteredOrders = localOrders.filter(order => order.status === 'paid'); // Paid only
+                const filteredOrders = localOrders.filter(order => order.status === 'paid' || order.status === 'cancelled');
                 filteredOrders.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
                 setOrders(filteredOrders);
-                console.log('📱 Emergency fallback to local paid orders:', filteredOrders.length);
+                console.log('📱 Emergency fallback to local orders:', filteredOrders.length);
             } catch (fallbackError) {
                 console.error('❌ Emergency fallback failed:', fallbackError);
                 setOrders([]); // Set empty array as final fallback
@@ -148,7 +164,6 @@ export default function LogScreen() {
         }
     };
 
-    // Add delete function for both Firebase and Local
     // Add delete function for both Firebase and Local - UPDATED
     const deleteAllOrders = async () => {
         Alert.alert(
@@ -178,7 +193,7 @@ export default function LogScreen() {
                                 try {
                                     console.log('🔥 Deleting orders from Firebase...');
                                     const ordersCollection = collection(db, 'orders');
-                                    const ordersSnapshot = await getDocs(ordersCollection);
+                                    const ordersSnapshot = await getDocs(ordersQuery);
 
                                     const deletePromises = ordersSnapshot.docs.map(async (document) => {
                                         await deleteDoc(doc(db, 'orders', document.id));
@@ -232,6 +247,44 @@ export default function LogScreen() {
             ]
         );
     };
+
+    // Add function to show all items (EXCLUDING CANCELLED ITEMS)
+    const showAllItems = () => {
+        try {
+            // Collect all NON-CANCELLED items from all orders
+            const items: any[] = [];
+
+            orders.forEach(order => {
+                // Only include items from paid orders and exclude cancelled items
+                if (order.status === 'paid') {
+                    order.items.forEach(item => {
+                        // Only include non-cancelled items
+                        if (!item.cancelled) {
+                            items.push({
+                                ...item,
+                                orderId: order.orderId,
+                                customerName: order.customerName,
+                                timestamp: order.timestamp
+                            });
+                        }
+                    });
+                }
+            });
+
+            setAllItems(items);
+            setShowItemsModal(true);
+        } catch (error) {
+            console.error('❌ Error preparing items list:', error);
+            Alert.alert('Error', 'Failed to load items list');
+        }
+    };
+
+    // Add function to close items modal
+    const closeItemsModal = () => {
+        setShowItemsModal(false);
+        setAllItems([]);
+    };
+
     useFocusEffect(
         React.useCallback(() => {
             loadOrders();
@@ -258,6 +311,7 @@ export default function LogScreen() {
     const getStatusColor = (status: string) => {
         switch (status) {
             case 'paid': return '#16A34A';
+            case 'cancelled': return '#DC2626';
             default: return '#D97706';
         }
     };
@@ -265,6 +319,7 @@ export default function LogScreen() {
     const getStatusIcon = (status: string) => {
         switch (status) {
             case 'paid': return 'check-circle';
+            case 'cancelled': return 'x-circle';
             default: return 'clock';
         }
     };
@@ -299,12 +354,23 @@ export default function LogScreen() {
     };
 
     const getFirstItemName = (items: any[]) => {
-        return items.length > 0 ? items[0].name : 'No items';
+        const activeItem = items.find(item => !item.cancelled);
+        return activeItem ? activeItem.name : 'All items cancelled';
     };
 
     const getTotalItems = (items: any[]) => {
         return items.reduce((total, item) => total + (item.quantity || 1), 0);
     };
+
+    const getActiveItemsCount = (items: any[]) => {
+        return items.filter(item => !item.cancelled).length;
+    };
+
+    // Add query for delete function
+    const ordersQuery = query(
+        collection(db, 'orders'),
+        where('status', 'in', ['paid', 'cancelled'])
+    );
 
     return (
         <ThemedView style={styles.container}>
@@ -329,6 +395,13 @@ export default function LogScreen() {
                                         <Feather name="refresh-cw" size={18} color="#874E3B" />
                                     </TouchableOpacity>
                                     <TouchableOpacity
+                                        style={styles.itemsButton}
+                                        onPress={showAllItems}
+                                        disabled={loading || orders.length === 0}
+                                    >
+                                        <Feather name="list" size={18} color="#2563EB" />
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
                                         style={styles.deleteButton}
                                         onPress={deleteAllOrders}
                                         disabled={loading}
@@ -342,7 +415,56 @@ export default function LogScreen() {
                                 {isOnlineMode ? '🔥 Connected to Firebase - Showing online data' : '📱 Using local storage - Showing local data'}
                             </ThemedText>
 
-                            {/* Filter Buttons - PAID ONLY */}
+                            {/* Filter Buttons - PAID AND CANCELLED */}
+                            <ThemedView style={styles.filterContainer}>
+                                <TouchableOpacity
+                                    style={[
+                                        styles.filterButton,
+                                        filter === 'all' && styles.filterButtonActive
+                                    ]}
+                                    onPress={() => setFilter('all')}
+                                >
+                                    <Feather name="layers" size={14} color={filter === 'all' ? '#FFFEEA' : '#874E3B'} />
+                                    <Text style={[
+                                        styles.filterButtonText,
+                                        filter === 'all' && styles.filterButtonTextActive
+                                    ]}>
+                                        ALL
+                                    </Text>
+                                </TouchableOpacity>
+
+                                <TouchableOpacity
+                                    style={[
+                                        styles.filterButton,
+                                        filter === 'paid' && styles.filterButtonActive
+                                    ]}
+                                    onPress={() => setFilter('paid')}
+                                >
+                                    <Feather name="check-circle" size={14} color={filter === 'paid' ? '#FFFEEA' : '#874E3B'} />
+                                    <Text style={[
+                                        styles.filterButtonText,
+                                        filter === 'paid' && styles.filterButtonTextActive
+                                    ]}>
+                                        PAID
+                                    </Text>
+                                </TouchableOpacity>
+
+                                <TouchableOpacity
+                                    style={[
+                                        styles.filterButton,
+                                        filter === 'cancelled' && styles.filterButtonActive
+                                    ]}
+                                    onPress={() => setFilter('cancelled')}
+                                >
+                                    <Feather name="x-circle" size={14} color={filter === 'cancelled' ? '#FFFEEA' : '#874E3B'} />
+                                    <Text style={[
+                                        styles.filterButtonText,
+                                        filter === 'cancelled' && styles.filterButtonTextActive
+                                    ]}>
+                                        CANCELLED
+                                    </Text>
+                                </TouchableOpacity>
+                            </ThemedView>
 
                         </ThemedView>
                     </ThemedView>
@@ -364,8 +486,8 @@ export default function LogScreen() {
                                     <ThemedText style={styles.emptyText}>No orders found</ThemedText>
                                     <ThemedText style={styles.emptySubtext}>
                                         {filter === 'all'
-                                            ? 'No paid orders yet'
-                                            : 'No paid orders found'}
+                                            ? 'No paid or cancelled orders yet'
+                                            : `No ${filter} orders found`}
                                     </ThemedText>
                                 </ThemedView>
                             ) : (
@@ -378,7 +500,7 @@ export default function LogScreen() {
                                         {/* Order Header */}
                                         <ThemedView style={styles.orderHeader}>
                                             <ThemedText style={styles.orderId}>
-                                                #{order.orderId.slice(-4)}
+                                                #{getOrderNumberIndicator(getFilteredOrders(), order.orderId)}
                                             </ThemedText>
                                             <ThemedView style={[styles.statusBadge, { backgroundColor: getStatusColor(order.status) }]}>
                                                 <Feather name={getStatusIcon(order.status)} size={10} color="#FFFEEA" />
@@ -403,13 +525,18 @@ export default function LogScreen() {
                                             <ThemedText style={styles.mainItem} numberOfLines={2}>
                                                 {getFirstItemName(order.items)}
                                             </ThemedText>
-                                            {order.items.length > 1 && (
+                                            {order.status === 'paid' && getActiveItemsCount(order.items) > 1 && (
                                                 <ThemedText style={styles.additionalItems}>
-                                                    +{order.items.length - 1} more items
+                                                    +{getActiveItemsCount(order.items) - 1} more items
+                                                </ThemedText>
+                                            )}
+                                            {order.status === 'cancelled' && (
+                                                <ThemedText style={styles.cancelledText}>
+                                                    All items cancelled
                                                 </ThemedText>
                                             )}
                                             <ThemedText style={styles.totalItems}>
-                                                {getTotalItems(order.items)} total items
+                                                {getActiveItemsCount(order.items)} active items
                                             </ThemedText>
                                         </ThemedView>
 
@@ -446,20 +573,25 @@ export default function LogScreen() {
                         <ThemedView style={styles.modalOverlay}>
                             <ThemedView style={styles.orderModal}>
                                 <ThemedView style={styles.modalHeader}>
-                                    <ThemedView>
+                                    <ThemedView style={styles.modalTitleContainer}>
                                         <ThemedText style={styles.modalTitle}>
-                                            Order #{selectedOrder?.orderId}
+                                            Order #{selectedOrder?.orderId.slice(-4)}
                                         </ThemedText>
+                                        <ThemedText style={styles.modalSubtitle}>
+                                            ID: {selectedOrder?.orderId}
+                                        </ThemedText>
+                                    </ThemedView>
+                                    <ThemedView style={styles.modalHeaderRight}>
                                         <ThemedView style={[styles.modalStatusBadge, { backgroundColor: getStatusColor(selectedOrder?.status || '') }]}>
                                             <Feather name={getStatusIcon(selectedOrder?.status || '')} size={14} color="#FFFEEA" />
                                             <ThemedText style={styles.modalStatusText}>
                                                 {selectedOrder?.status.toUpperCase()}
                                             </ThemedText>
                                         </ThemedView>
+                                        <TouchableOpacity onPress={closeOrderModal}>
+                                            <Feather name="x" size={24} color="#874E3B" />
+                                        </TouchableOpacity>
                                     </ThemedView>
-                                    <TouchableOpacity onPress={closeOrderModal}>
-                                        <Feather name="x" size={24} color="#874E3B" />
-                                    </TouchableOpacity>
                                 </ThemedView>
 
                                 <ThemedView style={styles.modalContent}>
@@ -479,26 +611,44 @@ export default function LogScreen() {
 
                                     <ThemedView style={styles.itemsSection}>
                                         <ThemedText style={styles.itemsLabel}>Order Items:</ThemedText>
-                                        {selectedOrder?.items.map((item, index) => (
-                                            <ThemedView key={index} style={styles.itemRow}>
-                                                <ThemedView style={styles.itemInfo}>
-                                                    <ThemedText style={styles.itemName}>
-                                                        {item.name}
-                                                    </ThemedText>
-                                                    <ThemedText style={styles.itemPrice}>
-                                                        ₱{item.price ? item.price.toFixed(2) : '0.00'}
-                                                    </ThemedText>
+                                        <ScrollView
+                                            style={styles.itemsScrollView}
+                                            showsVerticalScrollIndicator={true}
+                                        >
+                                            {selectedOrder?.items.map((item, index) => (
+                                                <ThemedView key={index} style={styles.itemRow}>
+                                                    <ThemedView style={styles.itemInfo}>
+                                                        <ThemedText style={[
+                                                            styles.itemName,
+                                                            item.cancelled && styles.itemCancelled
+                                                        ]}>
+                                                            {item.name}
+                                                        </ThemedText>
+                                                        <ThemedText style={[
+                                                            styles.itemPrice,
+                                                            item.cancelled && styles.itemCancelled
+                                                        ]}>
+                                                            ₱{item.price ? item.price.toFixed(2) : '0.00'}
+                                                            {item.cancelled && ' (Cancelled)'}
+                                                        </ThemedText>
+                                                    </ThemedView>
+                                                    <ThemedView style={styles.quantitySection}>
+                                                        <ThemedText style={[
+                                                            styles.itemQuantity,
+                                                            item.cancelled && styles.itemCancelled
+                                                        ]}>
+                                                            x{item.quantity}
+                                                        </ThemedText>
+                                                        <ThemedText style={[
+                                                            styles.itemTotal,
+                                                            item.cancelled && styles.itemCancelled
+                                                        ]}>
+                                                            ₱{((item.price || 0) * (item.quantity || 1)).toFixed(2)}
+                                                        </ThemedText>
+                                                    </ThemedView>
                                                 </ThemedView>
-                                                <ThemedView style={styles.quantitySection}>
-                                                    <ThemedText style={styles.itemQuantity}>
-                                                        x{item.quantity}
-                                                    </ThemedText>
-                                                    <ThemedText style={styles.itemTotal}>
-                                                        ₱{((item.price || 0) * (item.quantity || 1)).toFixed(2)}
-                                                    </ThemedText>
-                                                </ThemedView>
-                                            </ThemedView>
-                                        ))}
+                                            ))}
+                                        </ScrollView>
                                     </ThemedView>
 
                                     <ThemedView style={styles.totalSectionModal}>
@@ -519,13 +669,69 @@ export default function LogScreen() {
                             </ThemedView>
                         </ThemedView>
                     </Modal>
+
+                    {/* All Items List Modal (EXCLUDES CANCELLED ITEMS) */}
+                    <Modal
+                        visible={showItemsModal}
+                        animationType="slide"
+                        transparent={true}
+                        onRequestClose={closeItemsModal}
+                    >
+                        <ThemedView style={styles.modalOverlay}>
+                            <ThemedView style={styles.itemsModal}>
+                                <ThemedView style={styles.modalHeader}>
+                                    <ThemedView>
+                                        <ThemedText style={styles.modalTitle}>
+                                            All Order Items
+                                        </ThemedText>
+                                        <ThemedText style={styles.itemsCount}>
+                                            {allItems.length} active items total (cancelled items excluded)
+                                        </ThemedText>
+                                    </ThemedView>
+                                    <TouchableOpacity onPress={closeItemsModal}>
+                                        <Feather name="x" size={24} color="#874E3B" />
+                                    </TouchableOpacity>
+                                </ThemedView>
+
+                                <ScrollView style={styles.itemsList}>
+                                    {allItems.map((item, index) => (
+                                        <ThemedView key={index} style={styles.itemRowModal}>
+                                            <ThemedView style={styles.itemNameSection}>
+                                                <ThemedText style={styles.itemNameModal} numberOfLines={2}>
+                                                    {item.name}
+                                                </ThemedText>
+                                                <ThemedText style={styles.itemOrderInfo}>
+                                                    Order #{item.orderId?.slice(-4)} • {item.customerName}
+                                                </ThemedText>
+                                            </ThemedView>
+
+                                            <ThemedView style={styles.itemPriceSection}>
+                                                <ThemedText style={styles.itemQuantityModal}>
+                                                    x{item.quantity || 1}
+                                                </ThemedText>
+                                                <ThemedText style={styles.itemPriceModal}>
+                                                    ₱{((item.price || 0) * (item.quantity || 1)).toFixed(2)}
+                                                </ThemedText>
+                                            </ThemedView>
+                                        </ThemedView>
+                                    ))}
+                                </ScrollView>
+
+                                <ThemedView style={styles.itemsFooter}>
+                                    <ThemedText style={styles.itemsTotal}>
+                                        Total: ₱{allItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0).toFixed(2)}
+                                    </ThemedText>
+                                </ThemedView>
+                            </ThemedView>
+                        </ThemedView>
+                    </Modal>
                 </ThemedView>
             </ImageBackground>
         </ThemedView>
     );
 }
 
-// Updated styles to include new buttons
+// Updated styles to include new buttons and modals
 const styles = StyleSheet.create({
     container: {
         flex: 1,
@@ -618,6 +824,16 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         borderWidth: 1,
         borderColor: '#D4A574',
+    },
+    itemsButton: {
+        width: 40,
+        height: 40,
+        borderRadius: 8,
+        backgroundColor: '#DBEAFE',
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#BFDBFE',
     },
     deleteButton: {
         width: 40,
@@ -723,6 +939,13 @@ const styles = StyleSheet.create({
         textAlign: 'center',
         marginBottom: 2,
     },
+    cancelledText: {
+        fontSize: 8,
+        color: '#DC2626',
+        fontStyle: 'italic',
+        textAlign: 'center',
+        marginBottom: 2,
+    },
     totalItems: {
         fontSize: 8,
         color: '#5A3921',
@@ -790,17 +1013,7 @@ const styles = StyleSheet.create({
         backgroundColor: 'rgba(0, 0, 0, 0.5)',
         justifyContent: 'center',
         alignItems: 'center',
-        padding: 20,
-    },
-    orderModal: {
-        width: '100%',
-        maxWidth: 400,
-        backgroundColor: '#FFFEEA',
-        borderRadius: 16,
-        borderWidth: 2,
-        borderColor: '#D4A574',
-        overflow: 'hidden',
-        maxHeight: '80%',
+        padding: 10,
     },
     modalHeader: {
         flexDirection: 'row',
@@ -811,12 +1024,13 @@ const styles = StyleSheet.create({
         borderBottomWidth: 1,
         borderBottomColor: '#D4A574',
     },
-    modalTitle: {
-        fontSize: 20,
-        fontWeight: 'bold',
-        color: '#874E3B',
-        fontFamily: 'LobsterTwoRegular',
-        marginBottom: 4,
+    modalTitleContainer: {
+        flex: 1,
+    },
+    modalHeaderRight: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
     },
     modalStatusBadge: {
         flexDirection: 'row',
@@ -825,13 +1039,32 @@ const styles = StyleSheet.create({
         paddingHorizontal: 8,
         paddingVertical: 4,
         borderRadius: 6,
-        alignSelf: 'flex-start',
     },
     modalStatusText: {
         color: '#FFFEEA',
         fontSize: 10,
         fontWeight: 'bold',
     },
+    orderModal: {
+        width: '100%',
+        maxWidth: 400,
+        backgroundColor: '#FFFEEA',
+        borderRadius: 16,
+        borderWidth: 2,
+        borderColor: '#D4A574',
+        overflow: 'hidden',
+        maxHeight: '90%', // Increase from 80% to 90%
+        height: 'auto',   // Add auto height
+    },
+
+    modalTitle: {
+        fontSize: 20,
+        fontWeight: 'bold',
+        color: '#874E3B',
+        fontFamily: 'LobsterTwoRegular',
+        marginBottom: 4,
+    },
+
     modalContent: {
         padding: 20,
     },
@@ -864,6 +1097,11 @@ const styles = StyleSheet.create({
     itemsSection: {
         marginBottom: 20,
     },
+    modalSubtitle: {
+        fontSize: 12,
+        color: '#8B7355',
+        marginTop: 2,
+    },
     itemsLabel: {
         fontSize: 14,
         color: '#8B7355',
@@ -888,6 +1126,11 @@ const styles = StyleSheet.create({
     itemPrice: {
         fontSize: 12,
         color: '#8B7355',
+    },
+    itemCancelled: {
+        textDecorationLine: 'line-through',
+        color: '#DC2626',
+        fontStyle: 'italic',
     },
     quantitySection: {
         alignItems: 'flex-end',
@@ -936,9 +1179,85 @@ const styles = StyleSheet.create({
         fontWeight: 'bold',
         color: '#5A3921',
     },
+    itemsScrollView: {
+        maxHeight: 200, // Set maximum height for scroll
+        minHeight: 100, // Set minimum height
+    },
+
     totalAmount: {
         fontSize: 20,
         fontWeight: 'bold',
         color: '#874E3B',
+    },
+    // Updated styles for items list modal - MAS DAKO NA
+    itemsModal: {
+        width: '95%',
+        height: '85%',
+        backgroundColor: '#FFFEEA',
+        borderRadius: 16,
+        borderWidth: 2,
+        borderColor: '#D4A574',
+        overflow: 'hidden',
+    },
+    itemsList: {
+        flex: 1,
+        padding: 16,
+        maxHeight: '80%',
+    },
+    itemRowModal: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingVertical: 16,
+        borderBottomWidth: 1,
+        borderBottomColor: '#E8D8C8',
+        minHeight: 60,
+    },
+    itemNameSection: {
+        flex: 1,
+        marginRight: 12,
+    },
+    itemNameModal: {
+        fontSize: 18,
+        fontWeight: '600',
+        color: '#5A3921',
+        marginBottom: 4,
+        flex: 1,
+    },
+    itemOrderInfo: {
+        fontSize: 12,
+        color: '#8B7355',
+        fontStyle: 'italic',
+    },
+    itemPriceSection: {
+        alignItems: 'flex-end',
+        minWidth: 80,
+    },
+    itemQuantityModal: {
+        fontSize: 16,
+        color: '#874E3B',
+        marginBottom: 4,
+    },
+    itemPriceModal: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        color: '#5A3921',
+    },
+    itemsFooter: {
+        padding: 20,
+        borderTopWidth: 2,
+        borderTopColor: '#D4A574',
+        backgroundColor: '#F5E6D3',
+    },
+    itemsTotal: {
+        fontSize: 20,
+        fontWeight: 'bold',
+        color: '#874E3B',
+        textAlign: 'center',
+    },
+    itemsCount: {
+        fontSize: 14,
+        color: '#8B7355',
+        marginTop: 4,
     },
 });

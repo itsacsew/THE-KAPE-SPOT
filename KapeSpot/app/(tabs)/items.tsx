@@ -1,6 +1,6 @@
 // app/(tabs)/items.tsx
 import { useState, useEffect } from 'react';
-import { StyleSheet, ScrollView, TextInput, TouchableOpacity, ImageBackground, Alert, Modal } from 'react-native';
+import { StyleSheet, ScrollView, TextInput, TouchableOpacity, ImageBackground, Alert, Modal, ActivityIndicator } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Feather } from "@expo/vector-icons";
@@ -100,12 +100,15 @@ export default function ItemsScreen() {
     const [editingCategory, setEditingCategory] = useState<Category | null>(null);
     const [categoryName, setCategoryName] = useState('');
     const [categoryIcon, setCategoryIcon] = useState('folder');
+    const [savingCategory, setSavingCategory] = useState(false); // ADDED: Spinner state
 
     // Item Edit Modal states
     const [editItemModal, setEditItemModal] = useState(false);
     const [editingItem, setEditingItem] = useState<MenuItem | null>(null);
     const [editItemStocks, setEditItemStocks] = useState('');
     const [editItemPrice, setEditItemPrice] = useState('');
+    const [editItemCategory, setEditItemCategory] = useState('');
+    const [showCategoryDropdown, setShowCategoryDropdown] = useState(false);
 
     // Cup Modal states
     const [cupModalVisible, setCupModalVisible] = useState(false);
@@ -500,6 +503,7 @@ export default function ItemsScreen() {
         setEditingCategory(null);
         setCategoryName('');
         setCategoryIcon('folder');
+        setSavingCategory(false); // RESET: Reset spinner state when closing modal
     };
 
     // Item Edit Functions
@@ -512,6 +516,7 @@ export default function ItemsScreen() {
         setEditingItem(item);
         setEditItemStocks(item.stocks.toString());
         setEditItemPrice(item.price.toString());
+        setEditItemCategory(item.category);
         setEditItemModal(true);
     };
 
@@ -520,6 +525,14 @@ export default function ItemsScreen() {
         setEditingItem(null);
         setEditItemStocks('');
         setEditItemPrice('');
+        setEditItemCategory('');
+        setShowCategoryDropdown(false);
+    };
+
+    // Function to handle category selection in edit modal
+    const handleCategorySelect = (categoryName: string) => {
+        setEditItemCategory(categoryName);
+        setShowCategoryDropdown(false);
     };
 
     // Cup Functions
@@ -557,8 +570,8 @@ export default function ItemsScreen() {
         setCupStocks('');
     };
 
-    // Update item stocks and price - FIREBASE VERSION
-    const updateItemStocksAndPrice = async (id: string, newStocks: number, newPrice: number) => {
+    // Update item stocks, price, and category - FIREBASE VERSION
+    const updateItemStocksAndPrice = async (id: string, newStocks: number, newPrice: number, newCategory: string) => {
         if (!isAdmin) {
             Alert.alert('Access Denied', 'Only administrators can update items.');
             return;
@@ -574,18 +587,18 @@ export default function ItemsScreen() {
 
             if (connectionMode === 'offline' || isOfflineItem) {
                 // OFFLINE MODE: Update local storage only
-                console.log('📱 Updating item stocks and price in local storage...');
+                console.log('📱 Updating item stocks, price, and category in local storage...');
 
                 // Update local state
                 setMenuItems(prev => prev.map(item =>
-                    item.id === id ? { ...item, stocks: newStocks, price: newPrice } : item
+                    item.id === id ? { ...item, stocks: newStocks, price: newPrice, category: newCategory } : item
                 ));
 
                 // Update local storage - TEMPORARY WORKAROUND
                 console.log('🔄 Using temporary workaround for local storage update...');
                 const localItems = await syncService.getItems();
                 const updatedItems = localItems.map(item =>
-                    item.id === id ? { ...item, stocks: newStocks, price: newPrice } : item
+                    item.id === id ? { ...item, stocks: newStocks, price: newPrice, category: newCategory } : item
                 );
                 await syncService.setItem('localItems', JSON.stringify(updatedItems));
 
@@ -594,25 +607,26 @@ export default function ItemsScreen() {
             }
 
             // ONLINE MODE: Update Firebase
-            console.log('🔥 Updating item stocks and price on Firebase...');
+            console.log('🔥 Updating item stocks, price, and category on Firebase...');
 
             if (itemToUpdate?.firebaseId) {
                 const itemDoc = doc(db, 'items', itemToUpdate.firebaseId);
                 await updateDoc(itemDoc, {
                     stocks: newStocks,
                     price: newPrice,
+                    category: newCategory,
                     updated_at: new Date().toISOString()
                 });
 
                 // Update local state
                 setMenuItems(prev => prev.map(item =>
-                    item.id === id ? { ...item, stocks: newStocks, price: newPrice } : item
+                    item.id === id ? { ...item, stocks: newStocks, price: newPrice, category: newCategory } : item
                 ));
 
                 // Also update local storage for backup - TEMPORARY WORKAROUND
                 const localItems = await syncService.getItems();
                 const updatedItems = localItems.map(item =>
-                    item.id === id ? { ...item, stocks: newStocks, price: newPrice } : item
+                    item.id === id ? { ...item, stocks: newStocks, price: newPrice, category: newCategory } : item
                 );
                 await syncService.setItem('localItems', JSON.stringify(updatedItems));
 
@@ -644,12 +658,18 @@ export default function ItemsScreen() {
             return;
         }
 
-        await updateItemStocksAndPrice(editingItem.id, stocksValue, priceValue);
+        if (!editItemCategory.trim()) {
+            Alert.alert('Error', 'Please select a category');
+            return;
+        }
+
+        await updateItemStocksAndPrice(editingItem.id, stocksValue, priceValue, editItemCategory);
         closeEditItemModal();
     };
 
     // Save category - FIREBASE VERSION with AUTO SYNC
     // Save category - FIXED: Save to proper source based on mode
+    // Save category - FIXED: No duplicates in Firebase
     const saveCategory = async () => {
         if (!isAdmin) {
             Alert.alert('Access Denied', 'Only administrators can save categories.');
@@ -661,13 +681,16 @@ export default function ItemsScreen() {
             return;
         }
 
+        // ADDED: Set saving state to true to show spinner
+        setSavingCategory(true);
+
         try {
             const syncService = OfflineSyncService.getInstance();
             const connectionMode = await getConnectionMode();
 
-            // Prepare category data with the selected icon
+            // Prepare category data
             const categoryData = {
-                name: categoryName,
+                name: categoryName.trim(),
                 icon: categoryIcon,
                 items_count: 0,
                 created_on: new Date().toISOString(),
@@ -675,20 +698,15 @@ export default function ItemsScreen() {
             };
 
             console.log('🔄 [CATEGORY SAVE] Starting category save process...');
-            console.log('📝 Category Data:', {
-                name: categoryName,
-                icon: categoryIcon,
-                isEdit: !!editingCategory,
-                editingId: editingCategory?.id
-            });
+            console.log('📝 Category Data:', categoryData);
             console.log('🌐 Current Mode:', connectionMode === 'offline' ? 'OFFLINE' : 'ONLINE');
 
             if (connectionMode === 'online') {
-                console.log('🔥 ONLINE MODE: Saving to Firebase first...');
+                console.log('🔥 ONLINE MODE: Saving to Firebase...');
 
                 try {
                     const firebaseData = {
-                        name: categoryName,
+                        name: categoryName.trim(),
                         icon: categoryIcon,
                         items_count: 0,
                         created_on: new Date().toISOString(),
@@ -698,22 +716,38 @@ export default function ItemsScreen() {
                     let firebaseId: string;
 
                     if (editingCategory && editingCategory.firebaseId) {
-                        // Update existing category in Firebase
+                        // UPDATE existing category in Firebase
+                        console.log('📝 [CATEGORY SAVE] Updating existing category in Firebase:', editingCategory.firebaseId);
                         const categoryDoc = doc(db, 'categories', editingCategory.firebaseId);
                         await updateDoc(categoryDoc, firebaseData);
                         firebaseId = editingCategory.firebaseId;
-                        console.log('📝 [CATEGORY SAVE] Updated existing category in Firebase');
+
+                        console.log('✅ [CATEGORY SAVE] Updated existing category in Firebase');
                     } else {
-                        // Create new category in Firebase
+                        // CREATE new category in Firebase - ONLY ONCE
+                        console.log('➕ [CATEGORY SAVE] Creating NEW category in Firebase...');
+
+                        // Check if category already exists in Firebase to prevent duplicates
+                        const categoriesCollection = collection(db, 'categories');
+                        const q = query(categoriesCollection, where('name', '==', categoryName.trim()));
+                        const querySnapshot = await getDocs(q);
+
+                        if (!querySnapshot.empty) {
+                            Alert.alert('Error', 'Category with this name already exists in Firebase!');
+                            setSavingCategory(false); // ADDED: Reset spinner state
+                            return;
+                        }
+
+                        // Create the category - ONLY THIS ONE PLACE
                         const docRef = await addDoc(collection(db, 'categories'), firebaseData);
                         firebaseId = docRef.id;
-                        console.log('➕ [CATEGORY SAVE] Created new category in Firebase');
+
+                        console.log('✅ [CATEGORY SAVE] Created new category in Firebase with ID:', firebaseId);
                     }
 
-                    console.log('✅ [CATEGORY SAVE] Step 1 COMPLETE: Saved to FIREBASE successfully');
+                    // STEP 2: Update local storage with Firebase info (for backup only)
+                    console.log('💾 [CATEGORY SAVE] Updating local storage with Firebase info...');
 
-                    // STEP 2: THEN SAVE TO LOCAL STORAGE WITH FIREBASE INFO
-                    console.log('💾 [CATEGORY SAVE] Step 2: Saving to LOCAL storage with Firebase info...');
                     const saveResult = await syncService.saveCategory({
                         ...categoryData,
                         id: firebaseId,
@@ -722,34 +756,30 @@ export default function ItemsScreen() {
                     }, true);
 
                     if (saveResult.success) {
-                        console.log('✅ [CATEGORY SAVE] Step 2 COMPLETE: Local record updated with Firebase ID');
-                        await loadCategories();
-                        Alert.alert(
-                            'Success',
-                            `Category "${categoryName}" with icon "${categoryIcon}" saved successfully to Firebase!`
-                        );
+                        console.log('✅ [CATEGORY SAVE] Local storage updated with Firebase ID');
                     } else {
                         console.log('⚠️ Firebase saved but local backup failed');
-                        await loadCategories();
-                        Alert.alert(
-                            'Success',
-                            `Category "${categoryName}" saved to Firebase!`
-                        );
                     }
 
-                    console.log('🎉 [CATEGORY SAVE] COMPLETE: Category with icon saved to FIREBASE!');
+                    // Reload categories and show success
+                    await loadCategories();
+                    Alert.alert(
+                        'Success',
+                        `Category "${categoryName}" saved successfully to Firebase!`
+                    );
 
                 } catch (firebaseError) {
-                    console.log('❌ Firebase save failed, saving to local storage only');
+                    console.error('❌ [CATEGORY SAVE] Firebase save failed:', firebaseError);
 
                     // Firebase failed, save to local storage only
+                    console.log('📱 [CATEGORY SAVE] Saving to local storage only...');
                     const localResult = await syncService.saveCategory(categoryData, false);
 
                     if (localResult.success) {
                         await loadCategories();
                         Alert.alert(
                             'Saved Locally',
-                            `Category "${categoryName}" with icon "${categoryIcon}" saved to local storage. Auto-sync triggered for Firebase.`
+                            `Category "${categoryName}" saved to local storage. Will sync to Firebase when online.`
                         );
                     } else {
                         Alert.alert('Error', 'Failed to save category to local storage.');
@@ -764,14 +794,14 @@ export default function ItemsScreen() {
                     await loadCategories();
                     Alert.alert(
                         'Saved Locally',
-                        `Category "${categoryName}" with icon "${categoryIcon}" saved to local storage. Will auto-sync when online.`
+                        `Category "${categoryName}" saved to local storage. Will auto-sync when online.`
                     );
                 } else {
                     Alert.alert('Error', 'Failed to save category to local storage.');
                 }
             }
 
-            console.log('🎉 [CATEGORY SAVE] FINAL: Category with icon saved successfully!');
+            console.log('🎉 [CATEGORY SAVE] FINAL: Category saved successfully!');
             closeCategoryModal();
 
             // AUTO SYNC: Trigger immediate sync attempt
@@ -783,15 +813,16 @@ export default function ItemsScreen() {
             }, 2000);
 
         } catch (error) {
-            console.error('❌ [CATEGORY SAVE] Error saving category with icon:', categoryIcon);
+            console.error('❌ [CATEGORY SAVE] Error saving category:', error);
             Alert.alert(
                 'Error',
                 `Failed to save category: ${error instanceof Error ? error.message : 'Unknown error'}`
             );
+        } finally {
+            // ADDED: Always reset saving state when done
+            setSavingCategory(false);
         }
     };
-
-    // Save cup function
     // Save cup function - FIXED: Save to proper source based on mode
     const saveCup = async () => {
         if (!isAdmin) {
@@ -2158,10 +2189,16 @@ export default function ItemsScreen() {
                                 <TouchableOpacity
                                     style={styles.saveModalButton}
                                     onPress={saveCategory}
+                                    disabled={savingCategory} // ADDED: Disable button when saving
                                 >
-                                    <ThemedText style={styles.saveModalButtonText}>
-                                        {editingCategory ? 'Update Category' : 'Add Category'}
-                                    </ThemedText>
+                                    {/* ADDED: Show spinner when saving */}
+                                    {savingCategory ? (
+                                        <ActivityIndicator size="small" color="#FFFEEA" />
+                                    ) : (
+                                        <ThemedText style={styles.saveModalButtonText}>
+                                            {editingCategory ? 'Update Category' : 'Add Category'}
+                                        </ThemedText>
+                                    )}
                                 </TouchableOpacity>
                             </ThemedView>
                         </ThemedView>
@@ -2216,6 +2253,68 @@ export default function ItemsScreen() {
                                         placeholder="Enter new price"
                                         placeholderTextColor="#9CA3AF"
                                     />
+                                </ThemedView>
+
+                                <ThemedView style={styles.inputContainer}>
+                                    <ThemedText style={styles.inputLabel}>
+                                        Current Category: {editingItem?.category}
+                                    </ThemedText>
+                                    <TouchableOpacity
+                                        style={styles.categoryDropdown}
+                                        onPress={() => setShowCategoryDropdown(true)}
+                                    >
+                                        <ThemedText style={editItemCategory ? styles.categorySelectedText : styles.categoryPlaceholderText}>
+                                            {editItemCategory || 'Select Category'}
+                                        </ThemedText>
+                                        <Feather name="chevron-down" size={20} color="#874E3B" />
+                                    </TouchableOpacity>
+
+                                    {/* Category Dropdown Modal */}
+                                    <Modal
+                                        visible={showCategoryDropdown}
+                                        transparent={true}
+                                        animationType="fade"
+                                        onRequestClose={() => setShowCategoryDropdown(false)}
+                                    >
+                                        <TouchableOpacity
+                                            style={styles.modalOverlay}
+                                            activeOpacity={1}
+                                            onPress={() => setShowCategoryDropdown(false)}
+                                        >
+                                            <ThemedView style={styles.dropdownContainer}>
+                                                {/* Header with Close Button (X) */}
+                                                <ThemedView style={styles.dropdownHeader}>
+                                                    <ThemedText style={styles.dropdownTitle}>Select Category</ThemedText>
+                                                    <TouchableOpacity
+                                                        style={styles.closeButton}
+                                                        onPress={() => setShowCategoryDropdown(false)}
+                                                    >
+                                                        <Feather name="x" size={20} color="#874E3B" />
+                                                    </TouchableOpacity>
+                                                </ThemedView>
+
+                                                <ScrollView style={styles.dropdownScrollView}>
+                                                    {categories.map((category) => (
+                                                        <TouchableOpacity
+                                                            key={category.id}
+                                                            style={[
+                                                                styles.categoryOption,
+                                                                editItemCategory === category.name && styles.categoryOptionSelected
+                                                            ]}
+                                                            onPress={() => handleCategorySelect(category.name)}
+                                                        >
+                                                            <ThemedText style={[
+                                                                styles.categoryOptionText,
+                                                                editItemCategory === category.name && styles.categoryOptionTextSelected
+                                                            ]}>
+                                                                {category.name}
+                                                            </ThemedText>
+                                                        </TouchableOpacity>
+                                                    ))}
+                                                </ScrollView>
+                                            </ThemedView>
+                                        </TouchableOpacity>
+                                    </Modal>
                                 </ThemedView>
                             </ThemedView>
 
@@ -3088,5 +3187,69 @@ const styles = StyleSheet.create({
     iconOptionSelected: {
         backgroundColor: '#874E3B',
         borderColor: '#874E3B',
+    },
+    // Category Dropdown Styles
+    categoryDropdown: {
+        backgroundColor: '#FFFFFF',
+        borderWidth: 1,
+        borderColor: '#D4A574',
+        borderRadius: 6,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+    },
+    categorySelectedText: {
+        fontSize: 14,
+        color: '#5A3921',
+    },
+    categoryPlaceholderText: {
+        fontSize: 14,
+        color: '#999',
+    },
+    dropdownContainer: {
+        backgroundColor: '#FFFEEA',
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#D4A574',
+        width: '80%',
+        maxHeight: 300,
+        overflow: 'hidden', // Add this to contain the header
+    },
+    dropdownHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingHorizontal: 16,
+        paddingVertical: 12,
+        borderBottomWidth: 1,
+        borderBottomColor: '#D4A574',
+        backgroundColor: "#fffecaF2"
+    },
+    dropdownTitle: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#874E3B',
+    },
+    dropdownScrollView: {
+        maxHeight: 300 - 50, // Adjust height to account for header
+    },
+    categoryOption: {
+        paddingHorizontal: 16,
+        paddingVertical: 12,
+        borderBottomWidth: 1,
+        borderBottomColor: '#F5E6D3',
+    },
+    categoryOptionSelected: {
+        backgroundColor: '#874E3B',
+    },
+    categoryOptionText: {
+        fontSize: 14,
+        color: '#5A3921',
+    },
+    categoryOptionTextSelected: {
+        color: '#FFFEEA',
+        fontWeight: 'bold',
     },
 });

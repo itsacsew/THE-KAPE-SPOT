@@ -20,11 +20,6 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "permissions": [
-        "android.permission.BLUETOOTH",
-        "android.permission.BLUETOOTH_ADMIN",
-        "android.permission.BLUETOOTH_CONNECT"
-      ],
       "package": "com.castillon.KapeSpot"
     },
     "web": {
@@ -44,18 +39,6 @@
             "backgroundColor": "#000000"
           }
         }
-      ],
-      "expo-secure-store",
-      [
-        "react-native-ble-plx",
-        {
-          "isBackgroundEnabled": true,
-          "modes": [
-            "peripheral",
-            "central"
-          ],
-          "bluetoothAlwaysPermission": "Allow $(PRODUCT_NAME) to connect to bluetooth devices"
-        }
       ]
     ],
     "experiments": {
@@ -65,9 +48,9 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "36fee7ce-7c11-4878-87ab-0cd2afca9258"
+        "projectId": "ffb7461d-1499-4864-971b-c47eb90625e8"
       }
     },
-    "owner": "castillonaccel0412"
+    "owner": "aceni"
   }
 }

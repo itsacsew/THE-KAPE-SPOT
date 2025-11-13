@@ -8,7 +8,8 @@ import {
     ImageBackground,
     Alert,
     Image,
-    Animated
+    Animated,
+    Text
 } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -340,6 +341,9 @@ export default function PosScreen() {
             loadMenuItems();
             loadCategories();
 
+            // CHECK AND RESET ORDER COUNTER IF NEW DAY
+            checkAndResetOrderCounter();
+
             // RESET STATE WHEN SCREEN GETS FOCUS
             resetPOSState();
 
@@ -353,7 +357,6 @@ export default function PosScreen() {
             };
         }, [])
     );
-
     const filteredItems = menuItems.filter(item =>
         item.name.toLowerCase().includes(searchQuery.toLowerCase()) &&
         (selectedCategory === 'All' || item.category === selectedCategory) &&
@@ -518,6 +521,74 @@ export default function PosScreen() {
             console.error('❌ Error updating Firebase item:', error);
         }
     };
+    // Function to generate sequential order numbers that reset at 12 AM
+    const generateSequentialOrderNumber = async (): Promise<string> => {
+        try {
+            const syncService = OfflineSyncService.getInstance();
+
+            // Get current date for daily reset
+            const now = new Date();
+            const today = now.toDateString();
+
+            // Get last order info from local storage
+            const lastOrderInfo = await syncService.getItem('lastOrderInfo');
+
+            let lastOrderNumber = 0;
+            let lastOrderDate = '';
+
+            if (lastOrderInfo) {
+                const info = JSON.parse(lastOrderInfo);
+                lastOrderNumber = info.number || 0;
+                lastOrderDate = info.date || '';
+            }
+
+            // Reset counter if it's a new day
+            if (lastOrderDate !== today) {
+                lastOrderNumber = 0;
+            }
+
+            // Increment order number
+            const newOrderNumber = lastOrderNumber + 1;
+
+            // Save updated order info
+            await syncService.setItem('lastOrderInfo', JSON.stringify({
+                number: newOrderNumber,
+                date: today
+            }));
+
+            // Format order number with leading zeros (001, 002, etc.)
+            return `ORD-${newOrderNumber.toString().padStart(2, '0')}`;
+
+        } catch (error) {
+            console.error('❌ Error generating sequential order number:', error);
+            // Fallback to timestamp-based ID
+            return `ORD-${Date.now()}`;
+        }
+    };
+    // Function to check if we need to reset the order counter
+    const checkAndResetOrderCounter = async (): Promise<void> => {
+        try {
+            const syncService = OfflineSyncService.getInstance();
+            const lastOrderInfo = await syncService.getItem('lastOrderInfo');
+
+            if (lastOrderInfo) {
+                const info = JSON.parse(lastOrderInfo);
+                const lastDate = info.date || '';
+                const today = new Date().toDateString();
+
+                // Reset if it's a new day
+                if (lastDate !== today) {
+                    await syncService.setItem('lastOrderInfo', JSON.stringify({
+                        number: 0,
+                        date: today
+                    }));
+                    console.log('🔄 Order counter reset for new day:', today);
+                }
+            }
+        } catch (error) {
+            console.error('❌ Error checking order counter reset:', error);
+        }
+    };
 
     const placeOrder = async () => {
         if (!orderType) {
@@ -540,9 +611,10 @@ export default function PosScreen() {
         try {
             const syncService = OfflineSyncService.getInstance();
             const connectionMode = await getConnectionMode();
+            const orderNumber = await generateSequentialOrderNumber();
 
             const receiptData: ReceiptData = {
-                orderId: `ORD-${Date.now()}`,
+                orderId: orderNumber,
                 customerName: customerName.trim(),
                 items: [...cart],
                 subtotal: subtotal,
@@ -886,27 +958,27 @@ export default function PosScreen() {
                                             )}
                                         </ThemedView>
 
-                                        <ThemedText style={styles.itemName} numberOfLines={2}>
+                                        <Text style={styles.itemName} numberOfLines={2}>
                                             {item.name}
-                                        </ThemedText>
-                                        <ThemedText style={styles.itemCategory}>
+                                        </Text>
+                                        <Text style={styles.itemCategory}>
                                             {item.category}
-                                        </ThemedText>
-                                        <ThemedText style={styles.itemCode}>
+                                        </Text>
+                                        <Text style={styles.itemCode}>
                                             Code: {item.code}
-                                        </ThemedText>
-                                        <ThemedText style={[
+                                        </Text>
+                                        <Text style={[
                                             styles.itemStock,
                                             item.stocks === 0 ? styles.outOfStock : styles.inStock
                                         ]}>
                                             Stock: {item.stocks}
-                                        </ThemedText>
+                                        </Text>
 
                                     </ThemedView>
                                     <ThemedView style={styles.bottomRow}>
-                                        <ThemedText style={styles.itemPrice}>
+                                        <Text style={styles.itemPrice}>
                                             ₱{item.price.toFixed(2)}
-                                        </ThemedText>
+                                        </Text>
                                         {checkItemRequiresCup(item) && (
                                             <ThemedView style={styles.cupIndicator}>
                                                 <Feather name="coffee" size={10} color="#FFFEEA" />
@@ -1077,8 +1149,7 @@ export default function PosScreen() {
                         {!orderType && (
                             <ThemedView style={styles.orderTypeContainer}>
                                 <ThemedText style={styles.orderTypeTitle}>
-                                    Select Order Type
-                                </ThemedText>
+                                    Select Order Type</ThemedText>
                                 <ThemedView style={styles.orderTypeButtons}>
                                     <TouchableOpacity
                                         style={[styles.orderTypeButton, styles.dineInButton]}
@@ -1173,6 +1244,7 @@ export default function PosScreen() {
                                     contentContainerStyle={styles.categoriesContent}
                                 >
                                     {categories.map((category, index) => (
+                                        // I-update ang category card JSX
                                         <TouchableOpacity
                                             key={`${category.id}-${index}`}
                                             style={[
@@ -1204,23 +1276,29 @@ export default function PosScreen() {
 
                                             <Feather
                                                 name={(category.icon || 'folder') as any}
-                                                size={32}
+                                                size={28} // Gi-reduce gamay ang icon size
                                                 color={selectedCategory === category.name ? '#FFFEEA' : '#874E3B'}
                                                 style={styles.categoryIcon}
                                             />
-                                            <ThemedText style={[
-                                                styles.categoryName,
-                                                selectedCategory === category.name && styles.categoryNameActive
-                                            ]}>
+
+                                            <Text
+                                                style={[
+                                                    styles.categoryName,
+                                                    selectedCategory === category.name && styles.categoryNameActive
+                                                ]}
+                                                numberOfLines={2} // Gi-limit sa 2 lines maximum
+                                                ellipsizeMode="tail" // Mag ... if mu-exceed
+                                            >
                                                 {category.name}
-                                            </ThemedText>
+                                            </Text>
+
                                             {category.items_count !== undefined && category.items_count > 0 && category.id !== 'all' && (
-                                                <ThemedText style={[
+                                                <Text style={[
                                                     styles.categoryCount,
                                                     selectedCategory === category.name && styles.categoryCountActive
                                                 ]}>
                                                     {category.items_count}
-                                                </ThemedText>
+                                                </Text>
                                             )}
                                         </TouchableOpacity>
                                     ))}
@@ -1253,51 +1331,90 @@ export default function PosScreen() {
             {showReceiptModal && currentReceipt && (
                 <ThemedView style={styles.modalOverlay}>
                     <ThemedView style={styles.receiptModal}>
+                        {/* RECEIPT HEADER - MATCHING SCREENSHOT */}
                         <ThemedView style={styles.receiptHeader}>
-                            <ThemedText style={styles.receiptTitle}>KapeSpot</ThemedText>
-                            <ThemedText style={styles.receiptSubtitle}>Order Receipt</ThemedText>
-                            <ThemedText style={styles.receiptOrderType}>
-                                {currentReceipt.orderType === 'dine-in' ? 'DINE IN' : 'TAKE OUT'}
-                            </ThemedText>
-                        </ThemedView>
-
-                        <ThemedView style={styles.receiptSection}>
-                            <ThemedText style={styles.receiptLabel}>Name: {currentReceipt.customerName}</ThemedText>
-                            <ThemedText style={styles.receiptLabel}>Order ID: {currentReceipt.orderId}</ThemedText>
-                            <ThemedText style={styles.receiptLabel}>Date: {currentReceipt.timestamp}</ThemedText>
+                            <ThemedText style={styles.receiptTitle}>THE KAPE SPOT</ThemedText>
+                            <ThemedText style={styles.receiptSubtitle}>THANK YOU FOR VISIT</ThemedText>
                         </ThemedView>
 
                         <ThemedView style={styles.receiptSeparator}>
-                            <ThemedText style={styles.separatorText}>______________________</ThemedText>
+                            <ThemedText style={styles.separatorText}>-----------------------</ThemedText>
                         </ThemedView>
 
+                        {/* ORDER DETAILS */}
+                        <ThemedView style={styles.receiptSection}>
+                            <ThemedView style={styles.receiptRow}>
+                                <ThemedText style={styles.receiptLabel}>Name:</ThemedText>
+                                <ThemedText style={styles.receiptValue}>{currentReceipt.customerName}</ThemedText>
+                            </ThemedView>
+                            <ThemedView style={styles.receiptRow}>
+                                <ThemedText style={styles.receiptLabel}>Order ID:</ThemedText>
+                                <ThemedText style={styles.receiptValue}>{currentReceipt.orderId}</ThemedText>
+                            </ThemedView>
+                            <ThemedView style={styles.receiptRow}>
+                                <ThemedText style={styles.receiptLabel}>Date:</ThemedText>
+                                <ThemedText style={styles.receiptValue}>
+                                    {new Date(currentReceipt.timestamp).toLocaleDateString()}
+                                </ThemedText>
+                            </ThemedView>
+                            <ThemedView style={styles.receiptRow}>
+                                <ThemedText style={styles.receiptLabel}>Time:</ThemedText>
+                                <ThemedText style={styles.receiptValue}>
+                                    {new Date(currentReceipt.timestamp).toLocaleTimeString()}
+                                </ThemedText>
+                            </ThemedView>
+                            <ThemedView style={styles.receiptRow}>
+                                <ThemedText style={styles.receiptLabel}>Type:</ThemedText>
+                                <ThemedText style={styles.receiptValue}>
+                                    {currentReceipt.orderType === 'dine-in' ? 'DINE IN' : 'TAKE OUT'}
+                                </ThemedText>
+                            </ThemedView>
+                        </ThemedView>
+
+                        <ThemedView style={styles.receiptSeparator}>
+                            <ThemedText style={styles.separatorText}>-----------------------</ThemedText>
+                        </ThemedView>
+
+                        {/* ORDER ITEMS */}
                         <ThemedView style={styles.receiptItems}>
                             <ThemedView style={styles.receiptItemHeader}>
-                                <ThemedText style={styles.itemHeaderText}>Item</ThemedText>
-                                <ThemedText style={styles.itemHeaderText}>Qty</ThemedText>
-                                <ThemedText style={styles.itemHeaderText}>Price</ThemedText>
-                                <ThemedText style={styles.itemHeaderText}>Total</ThemedText>
+                                <Text style={[styles.itemHeaderText, styles.itemNameHeader]}>Item</Text>
+                                <Text style={[styles.itemHeaderText, styles.itemQtyHeader]}>Qty</Text>
+                                <Text style={[styles.itemHeaderText, styles.itemPriceHeader]}>Price</Text>
+                                <Text style={[styles.itemHeaderText, styles.itemTotalHeader]}>Total</Text>
                             </ThemedView>
 
                             {currentReceipt.items.map((item, index) => (
                                 <ThemedView key={`${item.id}-${index}`} style={styles.receiptItem}>
-                                    <ThemedText style={styles.receiptItemName} numberOfLines={1}>{item.name}</ThemedText>
-                                    <ThemedText style={styles.itemQty}>{item.quantity}</ThemedText>
-                                    <ThemedText style={styles.itemPrice}>₱{item.price.toFixed(2)}</ThemedText>
-                                    <ThemedText style={styles.itemTotal}>₱{(item.price * item.quantity).toFixed(2)}</ThemedText>
+                                    <Text style={[styles.receiptItemText, styles.itemName]} numberOfLines={1}>
+                                        {item.name}
+                                    </Text>
+                                    <Text style={[styles.receiptItemText, styles.itemQty]}>{item.quantity}</Text>
+                                    <Text style={[styles.receiptItemText, styles.itemPrice]}>₱{item.price.toFixed(2)}</Text>
+                                    <Text style={[styles.receiptItemText, styles.itemTotal]}>
+                                        ₱{(item.price * item.quantity).toFixed(2)}
+                                    </Text>
                                 </ThemedView>
                             ))}
                         </ThemedView>
 
                         <ThemedView style={styles.receiptSeparator}>
-                            <ThemedText style={styles.separatorText}>______________________</ThemedText>
+                            <ThemedText style={styles.separatorText}>-----------------------</ThemedText>
                         </ThemedView>
 
+                        {/* TOTALS */}
                         <ThemedView style={styles.receiptTotal}>
-                            <ThemedText style={styles.totalLabel}>Amount to Pay:</ThemedText>
-                            <ThemedText style={styles.totalAmount}>₱{currentReceipt.total.toFixed(2)}</ThemedText>
+                            <ThemedView style={styles.totalRow}>
+                                <ThemedText style={styles.totalLabel}>Sub Total:</ThemedText>
+                                <ThemedText style={styles.totalValue}>₱{currentReceipt.subtotal.toFixed(2)}</ThemedText>
+                            </ThemedView>
+                            <ThemedView style={styles.totalRow}>
+                                <ThemedText style={styles.totalLabel}>Amount Due:</ThemedText>
+                                <ThemedText style={styles.grandTotalValue}>₱{currentReceipt.total.toFixed(2)}</ThemedText>
+                            </ThemedView>
                         </ThemedView>
 
+                        {/* CUPS USED - ONLY FOR TAKE OUT */}
                         {currentReceipt.orderType === 'take-out' && currentReceipt.cupsUsed && currentReceipt.cupsUsed > 0 && (
                             <ThemedView style={styles.cupsUsedSection}>
                                 <ThemedText style={styles.cupsUsedText}>
@@ -1306,6 +1423,12 @@ export default function PosScreen() {
                             </ThemedView>
                         )}
 
+                        {/* THANK YOU MESSAGE */}
+                        <ThemedView style={styles.thankYouSection}>
+                            <ThemedText style={styles.thankYouText}>Thank you for your order!</ThemedText>
+                        </ThemedView>
+
+                        {/* ACTIONS */}
                         <ThemedView style={styles.receiptActions}>
                             <TouchableOpacity style={styles.printButton} onPress={handlePrintReceipt}>
                                 <ThemedText style={styles.printButtonText}>Print Receipt (2 Copies)</ThemedText>
@@ -1314,7 +1437,7 @@ export default function PosScreen() {
                                 style={styles.cancelReceiptButton}
                                 onPress={() => {
                                     setShowReceiptModal(false);
-                                    resetAfterOrder(); // RESET AFTER CLOSING RECEIPT
+                                    resetAfterOrder();
                                 }}
                             >
                                 <ThemedText style={styles.cancelReceiptButtonText}>Close</ThemedText>
@@ -1339,19 +1462,19 @@ const styles = StyleSheet.create({
     },
     categoryModeIndicator: {
         position: 'absolute',
-        top: 4,
-        right: 4,
-        width: 16,
-        height: 16,
-        borderRadius: 8,
+        top: 2, // Gi-adjust gikan sa 4
+        right: 2, // Gi-adjust gikan sa 4
+        width: 14, // Gi-reduce gamay
+        height: 14, // Gi-reduce gamay
+        borderRadius: 7,
         justifyContent: 'center',
         alignItems: 'center',
         zIndex: 10,
     },
     categoryCount: {
-        fontSize: 10,
+        fontSize: 8, // Gi-gamay gamay
         color: '#874E3B',
-        marginTop: 2,
+        marginTop: 1,
         fontWeight: 'bold',
     },
     categoryCountActive: {
@@ -1419,6 +1542,214 @@ const styles = StyleSheet.create({
     totalHeader: {
         flex: 1.5,
         textAlign: 'right',
+    },
+    // Updated receipt styles for 2-inch width
+    modalOverlay: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        zIndex: 1000,
+    },
+    receiptModal: {
+        width: 250, // Approximately 2 inches on most devices
+        backgroundColor: '#FFFFFF',
+        borderRadius: 4,
+        padding: 12,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.25,
+        shadowRadius: 4,
+        elevation: 5,
+        maxHeight: '80%',
+    },
+    receiptHeader: {
+        alignItems: 'center',
+        marginBottom: 6,
+    },
+    receiptTitle: {
+        fontSize: 14,
+        fontWeight: 'bold',
+        color: '#000000',
+        textAlign: 'center',
+        marginBottom: 2,
+    },
+    receiptSubtitle: {
+        fontSize: 10,
+        color: '#000000',
+        textAlign: 'center',
+    },
+    receiptSeparator: {
+        alignItems: 'center',
+        marginVertical: 6,
+    },
+    separatorText: {
+        fontSize: 10,
+        color: '#000000',
+        letterSpacing: 0.5,
+    },
+    receiptSection: {
+        marginBottom: 6,
+    },
+    receiptRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        marginBottom: 1,
+    },
+    receiptLabel: {
+        fontSize: 9,
+        color: '#000000',
+        fontWeight: '500',
+    },
+    receiptValue: {
+        fontSize: 9,
+        color: '#000000',
+    },
+    receiptItems: {
+        marginBottom: 6,
+    },
+    receiptItemHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        marginBottom: 3,
+        paddingBottom: 1,
+        borderBottomWidth: 1,
+        borderBottomColor: '#CCCCCC',
+    },
+    itemHeaderText: {
+        fontSize: 8,
+        fontWeight: 'bold',
+        color: '#000000',
+    },
+    itemNameHeader: {
+        flex: 3,
+        textAlign: 'left',
+    },
+    itemQtyHeader: {
+        flex: 1,
+        textAlign: 'center',
+    },
+    itemPriceHeader: {
+        flex: 2,
+        textAlign: 'right',
+    },
+    itemTotalHeader: {
+        flex: 2,
+        textAlign: 'right',
+    },
+    receiptItem: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        marginBottom: 1,
+    },
+    receiptItemText: {
+        fontSize: 8,
+        color: '#000000',
+    },
+    itemName: {
+        flex: 3,
+        textAlign: 'left',
+        color: '#F5E6D3',
+        fontWeight: '500',
+        fontFamily: 'LobsterTwoRegular',
+        textShadowColor: 'rgba(0, 0, 0, 0.9)',
+        textShadowOffset: { width: 2, height: 2 },
+        textShadowRadius: 4,
+        shadowColor: 'rgba(0, 0, 0, 0.9)',
+    },
+    itemQty: {
+        flex: 1,
+        textAlign: 'center',
+    },
+    itemPrice: {
+        flex: 2,
+        textAlign: 'right',
+        color: '#F5E6D3',
+        fontWeight: '500',
+        fontFamily: 'LobsterTwoRegular',
+        textShadowColor: 'rgba(0, 0, 0, 0.9)',
+        textShadowOffset: { width: 2, height: 2 },
+        textShadowRadius: 4,
+        shadowColor: 'rgba(0, 0, 0, 0.9)',
+    },
+    itemTotal: {
+        flex: 2,
+        textAlign: 'right',
+        fontWeight: '500',
+    },
+    receiptTotal: {
+        marginBottom: 6,
+    },
+    totalRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        marginBottom: 1,
+    },
+    totalLabel: {
+        fontSize: 15,
+        color: '#000000',
+        fontWeight: '500',
+    },
+    totalValue: {
+        fontSize: 15,
+        color: '#000000',
+    },
+    grandTotalValue: {
+        fontSize: 17,
+        fontWeight: 'bold',
+        color: '#000000',
+    },
+    cupsUsedSection: {
+        alignItems: 'center',
+        marginBottom: 6,
+        padding: 3,
+        backgroundColor: '#F5F5F5',
+        borderRadius: 2,
+    },
+    cupsUsedText: {
+        fontSize: 8,
+        color: '#000000',
+        fontWeight: '500',
+    },
+    thankYouSection: {
+        alignItems: 'center',
+        marginBottom: 8,
+    },
+    thankYouText: {
+        fontSize: 9,
+        color: '#000000',
+        fontStyle: 'italic',
+    },
+    receiptActions: {
+        gap: 6,
+    },
+    printButton: {
+        backgroundColor: '#000000',
+        paddingVertical: 8,
+        borderRadius: 3,
+        alignItems: 'center',
+    },
+    printButtonText: {
+        color: '#FFFFFF',
+        fontSize: 10,
+        fontWeight: 'bold',
+    },
+    cancelReceiptButton: {
+        backgroundColor: '#CCCCCC',
+        paddingVertical: 8,
+        borderRadius: 3,
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#999999',
+    },
+    cancelReceiptButtonText: {
+        color: '#000000',
+        fontSize: 10,
+        fontWeight: 'bold',
     },
     orderList: {
         flex: 1,
@@ -1502,21 +1833,6 @@ const styles = StyleSheet.create({
         borderTopColor: '#874E3B',
         marginBottom: 12,
     },
-    totalRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        paddingVertical: 3,
-        backgroundColor: 'rgba(255, 254, 234, 0.95)',
-    },
-    totalLabel: {
-        fontSize: 16,
-        color: '#5A3921',
-    },
-    totalValue: {
-        fontSize: 16,
-        color: '#5A3921',
-        fontWeight: '500',
-    },
     grandTotal: {
         borderTopWidth: 1,
         borderTopColor: '#D4A574',
@@ -1525,11 +1841,6 @@ const styles = StyleSheet.create({
     },
     grandTotalLabel: {
         fontSize: 18,
-        fontWeight: 'bold',
-        color: '#874E3B',
-    },
-    grandTotalValue: {
-        fontSize: 20,
         fontWeight: 'bold',
         color: '#874E3B',
     },
@@ -1575,7 +1886,7 @@ const styles = StyleSheet.create({
         borderColor: '#D4A574',
         borderRadius: 8,
         paddingHorizontal: 12,
-        paddingVertical: 8,
+        paddingVertical: 5,
     },
     searchIcon: {
         marginRight: 8,
@@ -1588,27 +1899,28 @@ const styles = StyleSheet.create({
     categoriesContainer: {
         flexDirection: 'row',
         marginBottom: 12,
-        maxHeight: 90,
+        maxHeight: 80,
     },
     categoriesContent: {
-        paddingVertical: 4,
+        paddingVertical: 2,
         gap: 12,
     },
+    // Extra compact version
     categoryCard: {
-        width: 80,
-        height: 80,
+        width: 75,
+        height: 60, // Gi-reduce pa gamay
         backgroundColor: '#F5E6D3',
-        borderRadius: 12,
-        borderWidth: 2,
+        borderRadius: 10,
+        borderWidth: 1,
         borderColor: '#D4A574',
         alignItems: 'center',
         justifyContent: 'center',
-        padding: 8,
+        padding: 4,
         shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
+        shadowOffset: { width: 0, height: 1 },
         shadowOpacity: 0.1,
-        shadowRadius: 3,
-        elevation: 3,
+        shadowRadius: 2,
+        elevation: 2,
     },
     categoryCardActive: {
         backgroundColor: '#874E3B',
@@ -1620,13 +1932,15 @@ const styles = StyleSheet.create({
         elevation: 5,
     },
     categoryIcon: {
-        marginBottom: 6,
+        marginBottom: 4, // Gi-reduce gikan sa 6
     },
     categoryName: {
-        fontSize: 12,
+        fontSize: 10, // Gi-gamay gamay para masud sa 3 words
         fontWeight: 'bold',
         color: '#874E3B',
         textAlign: 'center',
+        marginTop: 2,
+        lineHeight: 12, // Gi-set ang line height para consistent
     },
     categoryNameActive: {
         color: '#FFFEEA',
@@ -1799,20 +2113,7 @@ const styles = StyleSheet.create({
         zIndex: 1,
         backgroundColor: 'transparent',
     },
-    itemName: {
-        fontSize: 18,
-        fontFamily: 'LobsterTwoItalic',
-        color: '#FFFEEA',
-        textShadowColor: 'rgba(0, 0, 0, 0.9)',
-        textShadowOffset: { width: 2, height: 2 },
-        textShadowRadius: 4,
-        shadowColor: 'rgba(0, 0, 0, 0.9)',
-        shadowOffset: { width: 2, height: 2 },
-        shadowOpacity: 0.9,
-        shadowRadius: 8,
-        elevation: 10,
-        lineHeight: 40,
-    },
+
     itemCategory: {
         fontSize: 15,
         color: '#F5E6D3',
@@ -1856,15 +2157,7 @@ const styles = StyleSheet.create({
         alignItems: 'flex-end',
         backgroundColor: 'transparent'
     },
-    itemPrice: {
-        fontSize: 14,
-        fontWeight: 'bold',
-        color: '#FFFEEA',
-        fontFamily: 'LobsterTwoRegular',
-        textShadowColor: 'rgba(0, 0, 0, 0.7)',
-        textShadowOffset: { width: 1, height: 1 },
-        textShadowRadius: 3,
-    },
+
     addButton: {
         width: 26,
         height: 26,
@@ -1989,45 +2282,7 @@ const styles = StyleSheet.create({
         fontSize: 16,
         color: '#5A3921',
     },
-    modalOverlay: {
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        backgroundColor: 'rgba(0, 0, 0, 0.5)',
-        justifyContent: 'center',
-        alignItems: 'center',
-        zIndex: 1000,
-    },
-    receiptModal: {
-        width: '85%',
-        backgroundColor: '#FFFEEA',
-        borderRadius: 12,
-        borderWidth: 2,
-        borderColor: '#D4A574',
-        padding: 20,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.3,
-        shadowRadius: 8,
-        elevation: 10,
-    },
-    receiptHeader: {
-        alignItems: 'center',
-        marginBottom: 16,
-    },
-    receiptTitle: {
-        fontSize: 24,
-        fontWeight: 'bold',
-        color: '#874E3B',
-        fontFamily: 'LobsterTwoItalic',
-    },
-    receiptSubtitle: {
-        fontSize: 14,
-        color: '#5A3921',
-        marginTop: 4,
-    },
+
     receiptOrderType: {
         fontSize: 16,
         fontWeight: 'bold',
@@ -2040,122 +2295,20 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: '#D4A574',
     },
-    receiptSection: {
-        marginBottom: 12,
-    },
-    receiptLabel: {
-        fontSize: 14,
-        color: '#5A3921',
-        marginBottom: 4,
-    },
-    receiptSeparator: {
-        alignItems: 'center',
-        marginVertical: 12,
-    },
-    separatorText: {
-        fontSize: 16,
-        color: '#5A3921',
-        letterSpacing: 2,
-    },
-    receiptItems: {
-        marginBottom: 12,
-    },
-    receiptItemHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        marginBottom: 8,
-        paddingBottom: 4,
-        borderBottomWidth: 1,
-        borderBottomColor: '#D4A574',
-    },
-    itemHeaderText: {
-        fontSize: 12,
-        fontWeight: 'bold',
-        color: '#874E3B',
-        flex: 1,
-        textAlign: 'center',
-    },
-    receiptItem: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        marginBottom: 6,
-    },
+
     receiptItemName: {
         fontSize: 12,
         color: '#5A3921',
         flex: 2,
     },
-    itemQty: {
-        fontSize: 12,
-        color: '#5A3921',
-        flex: 1,
-        textAlign: 'center',
-    },
 
-    itemTotal: {
-        fontSize: 12,
-        color: '#5A3921',
-        flex: 1,
-        textAlign: 'right',
-        fontWeight: 'bold',
-    },
-    receiptTotal: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginTop: 12,
-        paddingTop: 12,
-        borderTopWidth: 1,
-        borderTopColor: '#D4A574',
-    },
 
     totalAmount: {
         fontSize: 18,
         fontWeight: 'bold',
         color: '#874E3B',
     },
-    cupsUsedSection: {
-        alignItems: 'center',
-        marginTop: 8,
-        padding: 8,
-        backgroundColor: '#F5E6D3',
-        borderRadius: 6,
-        borderWidth: 1,
-        borderColor: '#D4A574',
-    },
-    cupsUsedText: {
-        fontSize: 14,
-        color: '#874E3B',
-        fontWeight: 'bold',
-    },
-    receiptActions: {
-        marginTop: 20,
-        gap: 12,
-    },
-    printButton: {
-        backgroundColor: '#874E3B',
-        paddingVertical: 12,
-        borderRadius: 8,
-        alignItems: 'center',
-    },
-    printButtonText: {
-        color: '#FFFEEA',
-        fontSize: 16,
-        fontWeight: 'bold',
-    },
-    cancelReceiptButton: {
-        backgroundColor: '#E8D8C8',
-        paddingVertical: 12,
-        borderRadius: 8,
-        alignItems: 'center',
-        borderWidth: 1,
-        borderColor: '#D4A574',
-    },
-    cancelReceiptButtonText: {
-        color: '#874E3B',
-        fontSize: 14,
-        fontWeight: 'bold',
-    },
+
     processingOverlay: {
         position: 'absolute',
         top: 0,
@@ -2247,9 +2400,9 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        marginBottom: 12,
+        marginBottom: 5,
         backgroundColor: 'rgba(255, 254, 234, 0.95)',
-        padding: 12,
+        padding: 5,
         borderRadius: 8,
         borderWidth: 1,
         borderColor: '#D4A574',

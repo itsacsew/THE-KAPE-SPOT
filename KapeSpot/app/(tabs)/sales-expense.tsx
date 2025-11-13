@@ -199,6 +199,12 @@ export default function SalesExpenseScreen() {
     const [expensesModalVisible, setExpensesModalVisible] = useState(false);
     const [allExpenses, setAllExpenses] = useState<ExpenseDocument[]>([]);
     const [loadingExpenses, setLoadingExpenses] = useState(false);
+    const [overallTotals, setOverallTotals] = useState({
+        today: 0,
+        week: 0,
+        month: 0,
+        year: 0
+    });
 
     // Initialize Firebase
     const db = getFirestore(app);
@@ -215,6 +221,7 @@ export default function SalesExpenseScreen() {
             return 'offline';
         }
     };
+
     const loadAllExpenses = async () => {
         setLoadingExpenses(true);
         try {
@@ -272,6 +279,42 @@ export default function SalesExpenseScreen() {
     // Calculate total of all expenses
     const getAllExpensesTotal = () => {
         return allExpenses.reduce((total, doc) => total + doc.total, 0);
+    };
+
+    // Calculate overall totals for different time periods
+    const calculateOverallTotals = (allOrders: OrderData[]) => {
+        const now = new Date();
+
+        // Today
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const todayTotal = allOrders
+            .filter(order => new Date(order.timestamp) >= todayStart)
+            .reduce((total, order) => total + order.total, 0);
+
+        // This Week
+        const weekStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        const weekTotal = allOrders
+            .filter(order => new Date(order.timestamp) >= weekStart)
+            .reduce((total, order) => total + order.total, 0);
+
+        // This Month
+        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+        const monthTotal = allOrders
+            .filter(order => new Date(order.timestamp) >= monthStart)
+            .reduce((total, order) => total + order.total, 0);
+
+        // This Year
+        const yearStart = new Date(now.getFullYear(), 0, 1);
+        const yearTotal = allOrders
+            .filter(order => new Date(order.timestamp) >= yearStart)
+            .reduce((total, order) => total + order.total, 0);
+
+        setOverallTotals({
+            today: todayTotal,
+            week: weekTotal,
+            month: monthTotal,
+            year: yearTotal
+        });
     };
 
     const loadOrders = async () => {
@@ -333,6 +376,7 @@ export default function SalesExpenseScreen() {
             allOrders.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
             setOrders(allOrders);
             processSalesData(allOrders);
+            calculateOverallTotals(allOrders); // Calculate overall totals
             console.log('✅ Final loaded sales data:', allOrders.length);
 
         } catch (error) {
@@ -344,6 +388,7 @@ export default function SalesExpenseScreen() {
             filteredOrders.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
             setOrders(filteredOrders);
             processSalesData(filteredOrders);
+            calculateOverallTotals(filteredOrders); // Calculate overall totals for fallback
             console.log('📱 Emergency fallback to local sales data:', filteredOrders.length);
         } finally {
             setLoading(false);
@@ -542,6 +587,7 @@ export default function SalesExpenseScreen() {
         const totalOrders = getTotalOrders();
         return totalOrders > 0 ? getTotalSales() / totalOrders : 0;
     };
+
     // Function to export expenses to txt file
     const exportExpensesToTxt = async () => {
         try {
@@ -604,6 +650,7 @@ export default function SalesExpenseScreen() {
             Alert.alert('Export Failed', 'Failed to export expenses report.');
         }
     };
+
     // Function to delete a single expense batch
     const deleteExpenseBatch = async (expenseId: string) => {
         try {
@@ -730,6 +777,26 @@ export default function SalesExpenseScreen() {
                                     {isOnlineMode ? '🔥 Connected to Firebase - Showing online data' : '📱 Using local storage - Showing local data'}
                                 </ThemedText>
 
+                                {/* Overall Sales Totals */}
+                                <ThemedView style={styles.overallTotalsContainer}>
+                                    <ThemedView style={styles.overallTotalItem}>
+                                        <ThemedText style={styles.overallTotalLabel}>Today.</ThemedText>
+                                        <ThemedText style={styles.overallTotalValue}>₱{overallTotals.today.toFixed(2)}</ThemedText>
+                                    </ThemedView>
+                                    <ThemedView style={styles.overallTotalItem}>
+                                        <ThemedText style={styles.overallTotalLabel}>This Week.</ThemedText>
+                                        <ThemedText style={styles.overallTotalValue}>₱{overallTotals.week.toFixed(2)}</ThemedText>
+                                    </ThemedView>
+                                    <ThemedView style={styles.overallTotalItem}>
+                                        <ThemedText style={styles.overallTotalLabel}>This Month.</ThemedText>
+                                        <ThemedText style={styles.overallTotalValue}>₱{overallTotals.month.toFixed(2)}</ThemedText>
+                                    </ThemedView>
+                                    <ThemedView style={styles.overallTotalItem}>
+                                        <ThemedText style={styles.overallTotalLabel}>This Year.</ThemedText>
+                                        <ThemedText style={styles.overallTotalValue}>₱{overallTotals.year.toFixed(2)}</ThemedText>
+                                    </ThemedView>
+                                </ThemedView>
+
                                 {/* Time Filter Buttons */}
                                 <ThemedView style={styles.filterContainer}>
                                     <TouchableOpacity
@@ -737,7 +804,7 @@ export default function SalesExpenseScreen() {
                                         onPress={() => setTimeFilter('day')}
                                     >
                                         <ThemedText style={[styles.filterButtonText, timeFilter === 'day' && styles.filterButtonTextActive]}>
-                                            TODAY
+                                            TODAY.
                                         </ThemedText>
                                     </TouchableOpacity>
                                     <TouchableOpacity
@@ -745,7 +812,7 @@ export default function SalesExpenseScreen() {
                                         onPress={() => setTimeFilter('week')}
                                     >
                                         <ThemedText style={[styles.filterButtonText, timeFilter === 'week' && styles.filterButtonTextActive]}>
-                                            THIS WEEK
+                                            THIS WEEK.
                                         </ThemedText>
                                     </TouchableOpacity>
                                     <TouchableOpacity
@@ -753,7 +820,7 @@ export default function SalesExpenseScreen() {
                                         onPress={() => setTimeFilter('month')}
                                     >
                                         <ThemedText style={[styles.filterButtonText, timeFilter === 'month' && styles.filterButtonTextActive]}>
-                                            THIS MONTH
+                                            THIS MONTH.
                                         </ThemedText>
                                     </TouchableOpacity>
                                     <TouchableOpacity
@@ -761,12 +828,13 @@ export default function SalesExpenseScreen() {
                                         onPress={() => setTimeFilter('year')}
                                     >
                                         <ThemedText style={[styles.filterButtonText, timeFilter === 'year' && styles.filterButtonTextActive]}>
-                                            THIS YEAR
+                                            THIS YEAR.
                                         </ThemedText>
                                     </TouchableOpacity>
                                 </ThemedView>
                             </ThemedView>
                         </ThemedView>
+
                         {/* All Expenses View Modal */}
                         <Modal
                             animationType="slide"
@@ -925,9 +993,9 @@ export default function SalesExpenseScreen() {
                                 <ThemedView style={styles.chartHeader}>
                                     <ThemedText style={styles.chartTitle}>Sales</ThemedText>
                                     <ThemedText style={styles.chartSubtitle}>
-                                        {timeFilter === 'day' ? 'Today' :
-                                            timeFilter === 'week' ? 'This Week' :
-                                                timeFilter === 'month' ? 'This Month' : 'This Year'}
+                                        {timeFilter === 'day' ? 'Today.' :
+                                            timeFilter === 'week' ? 'This Week.' :
+                                                timeFilter === 'month' ? 'This Month.' : 'This Year.'}
                                     </ThemedText>
                                 </ThemedView>
 
@@ -1123,6 +1191,34 @@ const styles = StyleSheet.create({
         padding: 16,
         borderWidth: 1,
         borderColor: '#D4A574',
+    },
+    // Overall Totals Styles
+    overallTotalsContainer: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        marginBottom: 12,
+        padding: 12,
+        backgroundColor: '#F5E6D3',
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#D4A574',
+    },
+    overallTotalItem: {
+        alignItems: 'center',
+        flex: 1,
+    },
+    overallTotalLabel: {
+        fontSize: 10,
+        fontWeight: 'bold',
+        color: '#5A3921',
+        marginBottom: 4,
+        textAlign: 'center',
+    },
+    overallTotalValue: {
+        fontSize: 12,
+        fontWeight: 'bold',
+        color: '#874E3B',
+        textAlign: 'center',
     },
     // Add these to your styles
     loadingContainer: {

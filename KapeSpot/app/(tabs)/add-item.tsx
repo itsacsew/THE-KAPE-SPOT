@@ -11,6 +11,7 @@ import {
     StatusBar,
     KeyboardAvoidingView,
     Platform,
+    Modal,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { ThemedText } from '@/components/themed-text';
@@ -90,8 +91,8 @@ export default function AddItemScreen() {
     const [loading, setLoading] = useState(false);
     const [categories, setCategories] = useState<Category[]>([]);
     const [isOnlineMode, setIsOnlineMode] = useState<boolean>(false);
-    const [cups, setCups] = useState<Cup[]>([]); // ADD CUP STATE
-
+    const [cups, setCups] = useState<Cup[]>([]);
+    const [showCategoryDropdown, setShowCategoryDropdown] = useState(false);
 
     // Refs for auto-scrolling
     const scrollViewRef = useRef<ScrollView>(null);
@@ -99,12 +100,9 @@ export default function AddItemScreen() {
     const codeInputRef = useRef<TextInput>(null);
     const priceInputRef = useRef<TextInput>(null);
     const stocksInputRef = useRef<TextInput>(null);
-    const categoryInputRef = useRef<TextInput>(null);
     const descriptionInputRef = useRef<TextInput>(null);
-    const [selectedCup, setSelectedCup] = useState<string>('');
 
     // New item form state
-    // New item form state - ADD CUP FIELD
     const [newItem, setNewItem] = useState({
         name: '',
         code: '',
@@ -112,9 +110,8 @@ export default function AddItemScreen() {
         category: '',
         stocks: '',
         description: '',
-        cupName: '' // ADD CUP NAME FIELD
+        cupName: ''
     });
-
 
     const [imageUri, setImageUri] = useState<string | null>(null);
     const [imageBase64, setImageBase64] = useState<string | null>(null);
@@ -130,7 +127,6 @@ export default function AddItemScreen() {
 
             // Hide navigation bar (bottom bar with home, back, etc.)
             await NavigationBar.setVisibilityAsync('hidden');
-
 
         } catch (error) {
             console.log('❌ Error hiding bars:', error);
@@ -243,6 +239,7 @@ export default function AddItemScreen() {
 
     useEffect(() => {
         loadCategories();
+        loadCups();
         requestPermissions();
     }, []);
 
@@ -429,7 +426,6 @@ export default function AddItemScreen() {
     };
 
     // Save item to Firebase Firestore with image as base64
-    // Save item to Firebase Firestore with image as base64 - FIXED
     const handleSaveItem = async () => {
         hideAllBars(); // Ensure ALL bars are hidden when saving
 
@@ -449,7 +445,6 @@ export default function AddItemScreen() {
             const syncService = OfflineSyncService.getInstance();
             const connectionMode = await getConnectionMode();
 
-            // In handleSaveItem function, update the itemData to include cupName:
             const itemData: any = {
                 name: newItem.name,
                 code: newItem.code,
@@ -457,7 +452,7 @@ export default function AddItemScreen() {
                 category: newItem.category,
                 stocks: parseInt(newItem.stocks) || 0,
                 description: newItem.description,
-                cupName: newItem.cupName, // ADD THIS LINE
+                cupName: newItem.cupName,
                 status: true,
                 sales: 0,
                 created_at: new Date().toISOString(),
@@ -571,6 +566,7 @@ export default function AddItemScreen() {
             setLoading(false);
         }
     };
+
     const loadCups = async () => {
         try {
             const syncService = OfflineSyncService.getInstance();
@@ -612,13 +608,6 @@ export default function AddItemScreen() {
         }
     };
 
-    // Update useEffect to load cups
-    useEffect(() => {
-        loadCategories();
-        loadCups(); // ADD THIS LINE
-        requestPermissions();
-    }, []);
-
     const handleCancel = () => {
         hideAllBars();
         setNewItem({
@@ -635,6 +624,7 @@ export default function AddItemScreen() {
         router.back();
         router.replace('/items');
     };
+
     // Add this function to refresh cups list
     const refreshCups = async () => {
         try {
@@ -692,6 +682,13 @@ export default function AddItemScreen() {
         }, [])
     );
 
+    // Function to handle category selection
+    const handleCategorySelect = (categoryName: string) => {
+        setNewItem(prev => ({ ...prev, category: categoryName }));
+        setShowCategoryDropdown(false);
+        hideAllBars();
+    };
+
     return (
         <ThemedView style={styles.container}>
             {/* Navbar Component */}
@@ -743,8 +740,6 @@ export default function AddItemScreen() {
 
                                 <ThemedView style={styles.formRow}>
                                     {/* Cup Type Field */}
-                                    {/* Cup Type Field */}
-
                                     <ThemedView style={styles.formGroup}>
                                         <ThemedText style={styles.label}>Cup Type *</ThemedText>
 
@@ -868,18 +863,65 @@ export default function AddItemScreen() {
 
                                 <ThemedView style={styles.formGroup}>
                                     <ThemedText style={styles.label}>Category *</ThemedText>
-                                    <ThemedView style={styles.categoryInput}>
-                                        <TextInput
-                                            ref={categoryInputRef}
-                                            style={styles.input}
-                                            value={newItem.category}
-                                            onChangeText={(text) => setNewItem(prev => ({ ...prev, category: text }))}
-                                            placeholder="Select or enter category"
-                                            onFocus={() => handleInputFocus('category', 200)}
-                                            returnKeyType="next"
-                                        />
+                                    <TouchableOpacity
+                                        style={styles.categoryDropdown}
+                                        onPress={() => {
+                                            setShowCategoryDropdown(true);
+                                            hideAllBars();
+                                        }}
+                                    >
+                                        <ThemedText style={newItem.category ? styles.categorySelectedText : styles.categoryPlaceholderText}>
+                                            {newItem.category || 'Select Category'}
+                                        </ThemedText>
                                         <Feather name="chevron-down" size={20} color="#874E3B" />
-                                    </ThemedView>
+                                    </TouchableOpacity>
+
+                                    {/* Category Dropdown Modal */}
+                                    <Modal
+                                        visible={showCategoryDropdown}
+                                        transparent={true}
+                                        animationType="fade"
+                                        onRequestClose={() => setShowCategoryDropdown(false)}
+                                    >
+                                        <TouchableOpacity
+                                            style={styles.modalOverlay}
+                                            activeOpacity={1}
+                                            onPress={() => setShowCategoryDropdown(false)}
+                                        >
+                                            <ThemedView style={styles.dropdownContainer}>
+                                                {/* Header with Close Button (X) */}
+                                                <ThemedView style={styles.dropdownHeader}>
+                                                    <ThemedText style={styles.dropdownTitle}>Select Category.</ThemedText>
+                                                    <TouchableOpacity
+                                                        style={styles.closeButton}
+                                                        onPress={() => setShowCategoryDropdown(false)}
+                                                    >
+                                                        <Feather name="x" size={20} color="#874E3B" />
+                                                    </TouchableOpacity>
+                                                </ThemedView>
+
+                                                <ScrollView style={styles.dropdownScrollView}>
+                                                    {categories.map((category) => (
+                                                        <TouchableOpacity
+                                                            key={category.id}
+                                                            style={[
+                                                                styles.categoryOption,
+                                                                newItem.category === category.name && styles.categoryOptionSelected
+                                                            ]}
+                                                            onPress={() => handleCategorySelect(category.name)}
+                                                        >
+                                                            <ThemedText style={[
+                                                                styles.categoryOptionText,
+                                                                newItem.category === category.name && styles.categoryOptionTextSelected
+                                                            ]}>
+                                                                {category.name}
+                                                            </ThemedText>
+                                                        </TouchableOpacity>
+                                                    ))}
+                                                </ScrollView>
+                                            </ThemedView>
+                                        </TouchableOpacity>
+                                    </Modal>
                                     {categories.length > 0 && (
                                         <ThemedText style={styles.categoryHint}>
                                             Available: {categories.map(cat => cat.name).join(', ')}
@@ -965,8 +1007,6 @@ const styles = StyleSheet.create({
         padding: 16,
         backgroundColor: 'transparent',
     },
-    // Add the missing style to your StyleSheet:
-
     suggestionContent: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -1039,13 +1079,49 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         gap: 12,
         marginBottom: 16,
+        backgroundColor: "rgba(255, 254, 234, 0.95)",
     },
     formGroup: {
         flex: 1,
+        backgroundColor: "rgba(255, 254, 234, 0.95)",
+    },
+    dropdownContainer: {
+        backgroundColor: '#FFFEEA',
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#D4A574',
+        width: '80%',
+        maxHeight: 300,
+        overflow: 'hidden', // Add this to contain the header
+    },
+
+    dropdownHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingHorizontal: 16,
+        paddingVertical: 12,
+        borderBottomWidth: 1,
+        borderBottomColor: '#D4A574',
+        backgroundColor: "#fffecaF2"
+    },
+
+    dropdownTitle: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#874E3B',
+    },
+
+    closeButton: {
+        padding: 4,
+    },
+
+    dropdownScrollView: {
+        maxHeight: 300 - 50, // Adjust height to account for header
     },
     label: {
         fontSize: 14,
-        color: '#5A3921',
+        backgroundColor: "rgba(255, 254, 234, 0.95)",
         marginBottom: 6,
         fontWeight: '500',
     },
@@ -1059,10 +1135,59 @@ const styles = StyleSheet.create({
         fontSize: 14,
         color: '#5A3921',
     },
-    // Add these styles to your StyleSheet:
+    // Category Dropdown Styles
+    categoryDropdown: {
+        backgroundColor: '#FFFFFF',
+        borderWidth: 1,
+        borderColor: '#D4A574',
+        borderRadius: 6,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+    },
+    categorySelectedText: {
+        fontSize: 14,
+        color: '#5A3921',
+    },
+    categoryPlaceholderText: {
+        fontSize: 14,
+        color: '#999',
+    },
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
 
+    categoryOption: {
+        paddingHorizontal: 16,
+        paddingVertical: 12,
+        borderBottomWidth: 1,
+        borderBottomColor: '#F5E6D3',
+    },
+    categoryOptionSelected: {
+        backgroundColor: '#874E3B',
+    },
+    categoryOptionText: {
+        fontSize: 14,
+        color: '#5A3921',
+    },
+    categoryOptionTextSelected: {
+        color: '#FFFEEA',
+        fontWeight: 'bold',
+    },
+    categoryHint: {
+        fontSize: 12,
+        color: '#874E3B',
+        marginTop: 4,
+        fontStyle: 'italic',
+    },
     cupSelectionContainer: {
         marginBottom: 8,
+        backgroundColor: "rgba(255, 254, 234, 0.95)",
     },
     cupScrollView: {
         maxHeight: 120,
@@ -1130,21 +1255,9 @@ const styles = StyleSheet.create({
         height: 80,
         textAlignVertical: 'top',
     },
-    categoryInput: {
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
-    categoryHint: {
-        fontSize: 12,
-        color: '#874E3B',
-        marginTop: 4,
-        fontStyle: 'italic',
-    },
     imageUploadArea: {
         alignItems: 'center',
     },
-    // Add these styles to the StyleSheet:
-
     cupSuggestions: {
         marginTop: 8,
     },

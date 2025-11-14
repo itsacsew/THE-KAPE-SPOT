@@ -480,7 +480,25 @@ export default function Navbar({ activeNav }: NavbarProps) {
                     {currentActiveNav === 'sales' && <ThemedView style={styles.activeIndicator} />}
                 </TouchableOpacity>
 
-
+                {/* Settings Button - Added next to Expenses */}
+                <TouchableOpacity
+                    style={styles.navLink}
+                    onPress={() => navigateTo('/settings', 'settings')}
+                >
+                    <Feather
+                        name="settings"
+                        size={20}
+                        color={currentActiveNav === 'settings' ? '#FFFEEA' : '#FFFEEA'}
+                        style={styles.navIcon}
+                    />
+                    <ThemedText style={[
+                        styles.navLinkText,
+                        currentActiveNav === 'settings' && styles.activeNavLinkText
+                    ]}>
+                        Settings
+                    </ThemedText>
+                    {currentActiveNav === 'settings' && <ThemedView style={styles.activeIndicator} />}
+                </TouchableOpacity>
 
                 {/* Sync Indicator */}
                 <TouchableOpacity

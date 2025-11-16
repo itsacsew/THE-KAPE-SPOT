@@ -30,6 +30,7 @@ import {
 } from 'firebase/firestore';
 import { app } from '@/lib/firebase-config';
 import { getOrderNumberIndicator } from './orderStatus';
+import BleManager from 'react-native-ble-manager';
 
 interface OrderItem {
     name: string;
@@ -50,6 +51,14 @@ interface OrderData {
     firebaseId?: string;
 }
 
+interface BluetoothConnection {
+    connected: boolean;
+    deviceName: string;
+    peripheralId: string;
+    serviceId: string;
+    connectedAt: string | null;
+}
+
 const { width } = Dimensions.get('window');
 const CARD_MARGIN = 3.7;
 const CARD_WIDTH = (width - (CARD_MARGIN * 20)) / 4; // 4 columns with margins
@@ -60,12 +69,49 @@ export default function LogScreen() {
     const [isOnlineMode, setIsOnlineMode] = useState<boolean>(false);
     const [selectedOrder, setSelectedOrder] = useState<OrderData | null>(null);
     const [showOrderModal, setShowOrderModal] = useState(false);
-    const [filter, setFilter] = useState<'all' | 'paid' | 'cancelled'>('all'); // Added 'cancelled' filter
+    const [filter, setFilter] = useState<'all' | 'paid' | 'cancelled'>('all');
     const [showItemsModal, setShowItemsModal] = useState(false);
     const [allItems, setAllItems] = useState<any[]>([]);
+    const [isBluetoothConnected, setIsBluetoothConnected] = useState<boolean>(false);
+    const [bluetoothDeviceName, setBluetoothDeviceName] = useState<string>('');
+    const [bluetoothConnection, setBluetoothConnection] = useState<BluetoothConnection | null>(null);
 
     // Initialize Firebase
     const db = getFirestore(app);
+
+    // Check Bluetooth connection status
+    useEffect(() => {
+        const checkBluetoothConnection = async () => {
+            try {
+                const syncService = OfflineSyncService.getInstance();
+                const bluetoothInfo = await syncService.getItem('bluetoothConnection');
+
+                if (bluetoothInfo) {
+                    const connectionData: BluetoothConnection = JSON.parse(bluetoothInfo);
+                    setIsBluetoothConnected(connectionData.connected || false);
+                    setBluetoothDeviceName(connectionData.deviceName || 'Bluetooth Device');
+                    setBluetoothConnection(connectionData);
+                } else {
+                    setIsBluetoothConnected(false);
+                    setBluetoothDeviceName('');
+                    setBluetoothConnection(null);
+                }
+            } catch (error) {
+                console.error('Error checking Bluetooth connection:', error);
+                setIsBluetoothConnected(false);
+                setBluetoothDeviceName('');
+                setBluetoothConnection(null);
+            }
+        };
+
+        checkBluetoothConnection();
+
+        const intervalId = setInterval(checkBluetoothConnection, 3000);
+
+        return () => {
+            clearInterval(intervalId);
+        };
+    }, []);
 
     const getConnectionMode = async (): Promise<'online' | 'offline'> => {
         try {
@@ -79,6 +125,7 @@ export default function LogScreen() {
             return 'offline';
         }
     };
+
     const getOrderNumberIndicator = (orders: OrderData[], orderId: string) => {
         const index = orders.findIndex(order => order.orderId === orderId);
         return (index + 1).toString().padStart(2, '0');
@@ -285,6 +332,146 @@ export default function LogScreen() {
         setAllItems([]);
     };
 
+    // Function to send data to Bluetooth printer (Same as sales-expense.tsx)
+    const sendToBluetoothPrinter = async (data: string) => {
+        try {
+            // Double check Bluetooth connection
+            if (!isBluetoothConnected || !bluetoothConnection) {
+                throw new Error('Bluetooth is not connected. Please connect to printer first.');
+            }
+
+            const syncService = OfflineSyncService.getInstance();
+            const bluetoothService = await syncService.getItem('bluetoothService');
+
+            if (!bluetoothService) {
+                throw new Error('Bluetooth service not found');
+            }
+
+            const serviceData = JSON.parse(bluetoothService);
+            const { peripheralId, serviceId, transfer } = serviceData;
+
+            console.log('📡 Printer details:', {
+                peripheralId,
+                serviceId,
+                transfer,
+                deviceName: bluetoothDeviceName,
+                isConnected: isBluetoothConnected
+            });
+
+            // Ensure BleManager is ready
+            try {
+                await BleManager.checkState();
+            } catch {
+                await BleManager.start({ showAlert: false });
+            }
+
+            // Thermal printer commands
+            const initializePrinter = [0x1B, 0x40];
+            const textNormal = [0x1B, 0x21, 0x00];
+            const centerAlign = [0x1B, 0x61, 0x01];
+            const lineFeed = [0x0A];
+            const paperCut = [0x1D, 0x56, 0x41, 0x10];
+
+            const textBytes = Array.from(new TextEncoder().encode(data));
+            const printData = [
+                ...initializePrinter,
+                ...centerAlign,
+                ...textBytes,
+                ...lineFeed, ...lineFeed,
+                ...paperCut
+            ];
+
+            console.log('🖨️ Sending items data to printer');
+            console.log('🔵 Bluetooth Status:', {
+                connected: isBluetoothConnected,
+                device: bluetoothDeviceName,
+                peripheralId: peripheralId
+            });
+
+            // Send to printer
+            await BleManager.write(
+                peripheralId,
+                serviceId,
+                transfer,
+                printData,
+                printData.length
+            );
+
+            console.log('✅ Items list printed successfully');
+            Alert.alert('Print Success', 'Items list printed successfully!');
+
+        } catch (error) {
+            console.error('❌ Print error:', error);
+
+            let errorMessage = 'Print failed. ';
+
+            // Proper error type checking
+            if (error instanceof Error) {
+                errorMessage += error.message;
+            } else {
+                errorMessage += 'Unknown error occurred.';
+            }
+
+            // Additional Bluetooth connection check in error
+            if (!isBluetoothConnected) {
+                errorMessage += ' Bluetooth connection lost.';
+            }
+
+            throw new Error(errorMessage);
+        }
+    };
+
+    // NEW: Function to print items list using Direct Bluetooth Printing (Same as sales-expense)
+    const printItemsList = async () => {
+        console.log('🖨️ Starting items list print process...');
+
+        if (!isBluetoothConnected || !bluetoothConnection) {
+            Alert.alert('Bluetooth Not Connected', 'Please connect to a Bluetooth printer first in Settings.');
+            return;
+        }
+
+        try {
+            const currentDate = new Date().toLocaleDateString();
+            const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const totalAmount = allItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0);
+            const totalOrders = new Set(allItems.map(item => item.orderId)).size;
+
+            // Create receipt content
+            const receiptContent = `
+KAPE SPOT
+------------
+ALL ORDER ITEMS REPORT
+------------
+DATE: ${currentDate}
+TIME: ${currentTime}
+------------
+ITEMS LIST:
+${allItems.map((item, index) =>
+                `${index + 1}. ${item.name}
+     Order #${item.orderId?.slice(-4)} • ${item.customerName}
+     Qty: ${item.quantity || 1} × ₱${(item.price || 0).toFixed(2)} = ₱${((item.price || 0) * (item.quantity || 1)).toFixed(2)}`
+            ).join('\n\n')}
+------------
+SUMMARY:
+Total Items: ${allItems.length}
+Total Orders: ${totalOrders}
+Grand Total: ₱${totalAmount.toFixed(2)}
+------------
+Thank you!
+        `.trim();
+
+            console.log('🖨️ Preparing to print items list to:', bluetoothDeviceName);
+            console.log('📄 Items list content:', receiptContent);
+
+            // Send to Bluetooth printer (same function as sales-expense)
+            await sendToBluetoothPrinter(receiptContent);
+
+        } catch (error) {
+            console.error('❌ Error printing items list:', error);
+            Alert.alert('Print Error', 'Failed to print items list. Please check printer connection.');
+        }
+    };
+
     useFocusEffect(
         React.useCallback(() => {
             loadOrders();
@@ -414,6 +601,23 @@ export default function LogScreen() {
                             <ThemedText style={styles.modeInfo}>
                                 {isOnlineMode ? '🔥 Connected to Firebase - Showing online data' : '📱 Using local storage - Showing local data'}
                             </ThemedText>
+
+                            {/* Bluetooth Connection Status */}
+                            {isBluetoothConnected ? (
+                                <ThemedView style={styles.bluetoothStatus}>
+                                    <Feather name="bluetooth" size={14} color="#007AFF" />
+                                    <ThemedText style={styles.bluetoothStatusText}>
+                                        Connected to {bluetoothDeviceName}
+                                    </ThemedText>
+                                </ThemedView>
+                            ) : (
+                                <ThemedView style={styles.bluetoothStatusOffline}>
+                                    <Feather name="bluetooth" size={14} color="#DC2626" />
+                                    <ThemedText style={styles.bluetoothStatusTextOffline}>
+                                        Bluetooth printer not connected
+                                    </ThemedText>
+                                </ThemedView>
+                            )}
 
                             {/* Filter Buttons - PAID AND CANCELLED */}
                             <ThemedView style={styles.filterContainer}>
@@ -670,7 +874,7 @@ export default function LogScreen() {
                         </ThemedView>
                     </Modal>
 
-                    {/* All Items List Modal (EXCLUDES CANCELLED ITEMS) */}
+                    {/* All Items List Modal (EXCLUDES CANCELLED ITEMS) - UPDATED WITH PRINTER VIEW */}
                     <Modal
                         visible={showItemsModal}
                         animationType="slide"
@@ -680,7 +884,7 @@ export default function LogScreen() {
                         <ThemedView style={styles.modalOverlay}>
                             <ThemedView style={styles.itemsModal}>
                                 <ThemedView style={styles.modalHeader}>
-                                    <ThemedView>
+                                    <ThemedView style={styles.modalHeaderLeft}>
                                         <ThemedText style={styles.modalTitle}>
                                             All Order Items
                                         </ThemedText>
@@ -688,10 +892,44 @@ export default function LogScreen() {
                                             {allItems.length} active items total (cancelled items excluded)
                                         </ThemedText>
                                     </ThemedView>
-                                    <TouchableOpacity onPress={closeItemsModal}>
-                                        <Feather name="x" size={24} color="#874E3B" />
-                                    </TouchableOpacity>
+                                    <ThemedView style={styles.modalHeaderRight}>
+                                        {/* Printer Button - Same as sales-expense */}
+                                        <TouchableOpacity
+                                            style={[
+                                                styles.printerButton,
+                                                !isBluetoothConnected && styles.printerButtonDisabled
+                                            ]}
+                                            onPress={printItemsList}
+                                            disabled={!isBluetoothConnected || allItems.length === 0}
+                                        >
+                                            <Feather
+                                                name="printer"
+                                                size={18}
+                                                color={isBluetoothConnected && allItems.length > 0 ? "#874E3B" : "#C4A484"}
+                                            />
+                                        </TouchableOpacity>
+                                        <TouchableOpacity onPress={closeItemsModal} style={styles.closeButton}>
+                                            <Feather name="x" size={24} color="#874E3B" />
+                                        </TouchableOpacity>
+                                    </ThemedView>
                                 </ThemedView>
+
+                                {/* Bluetooth Status in Modal */}
+                                {isBluetoothConnected ? (
+                                    <ThemedView style={styles.bluetoothStatusModal}>
+                                        <Feather name="bluetooth" size={12} color="#007AFF" />
+                                        <ThemedText style={styles.bluetoothStatusTextModal}>
+                                            Connected to {bluetoothDeviceName}
+                                        </ThemedText>
+                                    </ThemedView>
+                                ) : (
+                                    <ThemedView style={styles.bluetoothStatusOfflineModal}>
+                                        <Feather name="bluetooth" size={12} color="#DC2626" />
+                                        <ThemedText style={styles.bluetoothStatusTextOfflineModal}>
+                                            Bluetooth printer not connected
+                                        </ThemedText>
+                                    </ThemedView>
+                                )}
 
                                 <ScrollView style={styles.itemsList}>
                                     {allItems.map((item, index) => (
@@ -720,6 +958,9 @@ export default function LogScreen() {
                                 <ThemedView style={styles.itemsFooter}>
                                     <ThemedText style={styles.itemsTotal}>
                                         Total: ₱{allItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0).toFixed(2)}
+                                    </ThemedText>
+                                    <ThemedText style={styles.itemsCountFooter}>
+                                        {allItems.length} items • {new Set(allItems.map(item => item.orderId)).size} orders
                                     </ThemedText>
                                 </ThemedView>
                             </ThemedView>
@@ -783,6 +1024,89 @@ const styles = StyleSheet.create({
         color: '#874E3B',
         fontStyle: 'italic',
         marginTop: 4,
+    },
+    // Bluetooth Status Styles
+    bluetoothStatus: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#E3F2FD',
+        padding: 8,
+        borderRadius: 6,
+        marginBottom: 12,
+        borderWidth: 1,
+        borderColor: '#007AFF',
+    },
+    bluetoothStatusOffline: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#FEF2F2',
+        padding: 8,
+        borderRadius: 6,
+        marginBottom: 12,
+        borderWidth: 1,
+        borderColor: '#DC2626',
+    },
+    bluetoothStatusText: {
+        fontSize: 12,
+        color: '#007AFF',
+        marginLeft: 8,
+        fontWeight: '500',
+    },
+    bluetoothStatusTextOffline: {
+        fontSize: 12,
+        color: '#DC2626',
+        marginLeft: 8,
+        fontWeight: '500',
+    },
+    // Modal Bluetooth Status
+    bluetoothStatusModal: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#E3F2FD',
+        padding: 6,
+        borderRadius: 4,
+        marginHorizontal: 16,
+        marginBottom: 12,
+        borderWidth: 1,
+        borderColor: '#007AFF',
+    },
+    bluetoothStatusOfflineModal: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#FEF2F2',
+        padding: 6,
+        borderRadius: 4,
+        marginHorizontal: 16,
+        marginBottom: 12,
+        borderWidth: 1,
+        borderColor: '#DC2626',
+    },
+    bluetoothStatusTextModal: {
+        fontSize: 10,
+        color: '#007AFF',
+        marginLeft: 6,
+        fontWeight: '500',
+    },
+    bluetoothStatusTextOfflineModal: {
+        fontSize: 10,
+        color: '#DC2626',
+        marginLeft: 6,
+        fontWeight: '500',
+    },
+    // Printer Button Styles
+    printerButton: {
+        width: 40,
+        height: 40,
+        borderRadius: 8,
+        backgroundColor: '#F5E6D3',
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#D4A574',
+    },
+    printerButtonDisabled: {
+        backgroundColor: '#F5E6D3',
+        borderColor: '#C4A484',
     },
     filterContainer: {
         flexDirection: 'row',
@@ -1024,13 +1348,16 @@ const styles = StyleSheet.create({
         borderBottomWidth: 1,
         borderBottomColor: '#D4A574',
     },
-    modalTitleContainer: {
+    modalHeaderLeft: {
         flex: 1,
     },
     modalHeaderRight: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: 12,
+    },
+    modalTitleContainer: {
+        flex: 1,
     },
     modalStatusBadge: {
         flexDirection: 'row',
@@ -1053,8 +1380,8 @@ const styles = StyleSheet.create({
         borderWidth: 2,
         borderColor: '#D4A574',
         overflow: 'hidden',
-        maxHeight: '90%', // Increase from 80% to 90%
-        height: 'auto',   // Add auto height
+        maxHeight: '90%',
+        height: 'auto',
     },
 
     modalTitle: {
@@ -1180,8 +1507,8 @@ const styles = StyleSheet.create({
         color: '#5A3921',
     },
     itemsScrollView: {
-        maxHeight: 200, // Set maximum height for scroll
-        minHeight: 100, // Set minimum height
+        maxHeight: 200,
+        minHeight: 100,
     },
 
     totalAmount: {
@@ -1189,7 +1516,7 @@ const styles = StyleSheet.create({
         fontWeight: 'bold',
         color: '#874E3B',
     },
-    // Updated styles for items list modal - MAS DAKO NA
+    // Updated styles for items list modal - WITH PRINTER VIEW
     itemsModal: {
         width: '95%',
         height: '85%',
@@ -1259,5 +1586,14 @@ const styles = StyleSheet.create({
         fontSize: 14,
         color: '#8B7355',
         marginTop: 4,
+    },
+    itemsCountFooter: {
+        fontSize: 14,
+        color: '#8B7355',
+        textAlign: 'center',
+        marginTop: 4,
+    },
+    closeButton: {
+        padding: 4,
     },
 });

@@ -624,8 +624,91 @@ Thank you!
         }
     };
 
+    // ADD: Function to print all expenses
+    const printAllExpenses = async () => {
+        // Check if Bluetooth is connected
+        if (!isBluetoothConnected || !bluetoothConnection) {
+            Alert.alert('Bluetooth Not Connected', 'Please connect to a Bluetooth printer first in Settings.');
+            return;
+        }
 
-    // Function to send data to Bluetooth printer
+        if (allExpenses.length === 0) {
+            Alert.alert('No Data', 'There are no expenses to print.');
+            return;
+        }
+
+        try {
+            console.log('🔵 Bluetooth is connected, proceeding with all expenses print...');
+            console.log('📱 Connected device:', bluetoothDeviceName);
+
+            const currentDate = new Date().toLocaleDateString();
+            const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+            // Create all expenses report content
+            let receiptContent = `    ALL EXPENSES REPORT
+==============================
+Date: ${currentDate}
+Time: ${currentTime}
+==============================
+
+`;
+
+            // Add each expense batch
+            allExpenses.forEach((expenseDoc, docIndex) => {
+                const batchDate = expenseDoc.createdAt ?
+                    new Date(expenseDoc.createdAt).toLocaleDateString() : 'Unknown Date';
+                const batchTime = expenseDoc.createdAt ?
+                    new Date(expenseDoc.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Unknown Time';
+
+                receiptContent += `BATCH ${docIndex + 1}
+Date: ${batchDate}
+Time: ${batchTime}
+------------------------------
+Item                Cost
+------------------------------
+`;
+
+                // Add each expense item
+                expenseDoc.expenses.forEach((expense, expenseIndex) => {
+                    const itemNumber = `${expenseIndex + 1}.`;
+                    const description = expense.description.substring(0, 16); // Limit description length
+                    const cost = `₱${expense.cost.toFixed(2)}`;
+
+                    receiptContent += `${itemNumber} ${description}`;
+                    receiptContent += ' '.repeat(20 - (itemNumber.length + 1 + description.length));
+                    receiptContent += `${cost}\n`;
+                });
+
+                receiptContent += `------------------------------
+Batch Total: ₱${expenseDoc.total.toFixed(2)}\n\n`;
+            });
+
+            // Add grand total
+            const grandTotal = getAllExpensesTotal();
+            const totalBatches = allExpenses.length;
+            const totalItems = allExpenses.reduce((total, doc) => total + doc.expenses.length, 0);
+
+            receiptContent += `==============================
+GRAND TOTAL
+Amount: ₱${grandTotal.toFixed(2)}
+Batches: ${totalBatches}
+Items: ${totalItems}
+==============================
+
+   END OF EXPENSES REPORT`;
+
+            console.log('🖨️ Preparing to print all expenses to:', bluetoothDeviceName);
+            console.log('📄 All expenses content:', receiptContent);
+
+            // Send to Bluetooth printer
+            await sendToBluetoothPrinter(receiptContent);
+
+        } catch (error) {
+            console.error('❌ Error printing all expenses:', error);
+            Alert.alert('Print Error', 'Failed to print all expenses. Please check printer connection.');
+        }
+    };
+
     // Function to send data to Bluetooth printer - FIXED VERSION
     const sendToBluetoothPrinter = async (data: string) => {
         try {
@@ -675,7 +758,7 @@ Thank you!
                 ...paperCut
             ];
 
-            console.log('🖨️ Sending sales data to printer');
+            console.log('🖨️ Sending data to printer');
             console.log('🔵 Bluetooth Status:', {
                 connected: isBluetoothConnected,
                 device: bluetoothDeviceName,
@@ -691,8 +774,8 @@ Thank you!
                 printData.length
             );
 
-            console.log('✅ Sales data printed successfully');
-            Alert.alert('Print Success', 'Today sales printed successfully!');
+            console.log('✅ Data printed successfully');
+            Alert.alert('Print Success', 'Report printed successfully!');
 
         } catch (error) {
             console.error('❌ Print error:', error);
@@ -1039,12 +1122,27 @@ Thank you!
                                                 </ThemedText>
                                             </ThemedView>
                                             <ThemedView style={styles.modalHeaderRight}>
+                                                {/* ADD: Print Button for All Expenses */}
+                                                <TouchableOpacity
+                                                    style={[
+                                                        styles.printButton,
+                                                        (!isBluetoothConnected || allExpenses.length === 0) && styles.printButtonDisabled
+                                                    ]}
+                                                    onPress={printAllExpenses}
+                                                    disabled={!isBluetoothConnected || allExpenses.length === 0}
+                                                >
+                                                    <Feather
+                                                        name="printer"
+                                                        size={18}
+                                                        color={(!isBluetoothConnected || allExpenses.length === 0) ? "#C4A484" : "#874E3B"}
+                                                    />
+                                                </TouchableOpacity>
                                                 <TouchableOpacity
                                                     style={styles.exportButton}
                                                     onPress={exportExpensesToTxt}
                                                     disabled={allExpenses.length === 0}
                                                 >
-                                                    <Feather name="download" size={20} color={allExpenses.length === 0 ? "#C4A484" : "#16A34A"} />
+                                                    <Feather name="download" size={18} color={allExpenses.length === 0 ? "#C4A484" : "#16A34A"} />
                                                 </TouchableOpacity>
                                                 <TouchableOpacity
                                                     style={styles.deleteAllButton}
@@ -1384,6 +1482,21 @@ const styles = StyleSheet.create({
         borderColor: '#D4A574',
     },
     printerButtonDisabled: {
+        backgroundColor: '#F5E6D3',
+        borderColor: '#C4A484',
+    },
+    // ADD: Print Button Styles for All Expenses Modal
+    printButton: {
+        width: 40,
+        height: 40,
+        borderRadius: 8,
+        backgroundColor: '#F5E6D3',
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#D4A574',
+    },
+    printButtonDisabled: {
         backgroundColor: '#F5E6D3',
         borderColor: '#C4A484',
     },

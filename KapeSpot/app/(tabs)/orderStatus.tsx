@@ -766,9 +766,9 @@ export default function OrderStatusScreen() {
                                             <ThemedText style={styles.orderId}>
                                                 #{getOrderNumberIndicator(index)}
                                             </ThemedText>
-                                            <ThemedView style={[styles.statusBadge, { backgroundColor: 'green' }]}>
+                                            <ThemedView style={[styles.statusBadge, { backgroundColor: 'red' }]}>
                                                 <Text style={styles.statusText}>
-                                                    PAID
+                                                    UNPAID
                                                 </Text>
                                             </ThemedView>
                                         </ThemedView>

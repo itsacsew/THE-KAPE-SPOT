@@ -1,13 +1,18 @@
-export type PeripheralServices = {
+export interface StrippedPeripheral {
+    id: string;
+    name: string | null;
+    rssi: number | null;
+    connected?: boolean;
+    connecting?: boolean;
+    localName?: string;
+    serviceUUIDs?: string[];
+    retrievedServices?: boolean;
+}
+
+export interface PeripheralServices {
     peripheralId: string;
     serviceId: string;
     transfer: string;
     receive: string;
-};
-  
-export interface StrippedPeripheral {
-    name?: string;
-    localName?: string;
-    rssi: number;
-    id: string;
+    allServices?: string[];
 }

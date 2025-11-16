@@ -36,6 +36,7 @@ import {
 } from 'firebase/firestore';
 import { app } from '@/lib/firebase-config';
 import * as FileSystem from 'expo-file-system';
+import BleManager from 'react-native-ble-manager';
 
 interface OrderData {
     orderId: string;
@@ -73,6 +74,14 @@ interface ExpenseDocument {
     total: number;
     timestamp: any;
     createdAt?: string;
+}
+
+interface BluetoothConnection {
+    connected: boolean;
+    deviceName: string;
+    peripheralId: string;
+    serviceId: string;
+    connectedAt: string | null;
 }
 
 const { width } = Dimensions.get('window');
@@ -142,15 +151,6 @@ const SimpleBarChart = ({ data, labels, color = '#874E3B', title }: { data: numb
     );
 };
 
-// Add these missing SVG components
-const Polyline = ({ points, ...props }: any) => (
-    <SvgText as="polyline" points={points} {...props} />
-);
-
-const Circle = (props: any) => (
-    <SvgText as="circle" {...props} />
-);
-
 // Recent Sales List Component
 const RecentSalesList = ({ orders }: { orders: OrderData[] }) => {
     return (
@@ -205,9 +205,46 @@ export default function SalesExpenseScreen() {
         month: 0,
         year: 0
     });
+    const [isBluetoothConnected, setIsBluetoothConnected] = useState<boolean>(false);
+    const [bluetoothDeviceName, setBluetoothDeviceName] = useState<string>('');
+    const [bluetoothConnection, setBluetoothConnection] = useState<BluetoothConnection | null>(null);
 
     // Initialize Firebase
     const db = getFirestore(app);
+
+    // Check Bluetooth connection status
+    useEffect(() => {
+        const checkBluetoothConnection = async () => {
+            try {
+                const syncService = OfflineSyncService.getInstance();
+                const bluetoothInfo = await syncService.getItem('bluetoothConnection');
+
+                if (bluetoothInfo) {
+                    const connectionData: BluetoothConnection = JSON.parse(bluetoothInfo);
+                    setIsBluetoothConnected(connectionData.connected || false);
+                    setBluetoothDeviceName(connectionData.deviceName || 'Bluetooth Device');
+                    setBluetoothConnection(connectionData);
+                } else {
+                    setIsBluetoothConnected(false);
+                    setBluetoothDeviceName('');
+                    setBluetoothConnection(null);
+                }
+            } catch (error) {
+                console.error('Error checking Bluetooth connection:', error);
+                setIsBluetoothConnected(false);
+                setBluetoothDeviceName('');
+                setBluetoothConnection(null);
+            }
+        };
+
+        checkBluetoothConnection();
+
+        const intervalId = setInterval(checkBluetoothConnection, 3000);
+
+        return () => {
+            clearInterval(intervalId);
+        };
+    }, []);
 
     const getConnectionMode = async (): Promise<'online' | 'offline'> => {
         try {
@@ -228,13 +265,8 @@ export default function SalesExpenseScreen() {
             const connectionMode = await getConnectionMode();
 
             if (connectionMode === 'offline') {
-                // Load from local storage for expenses
-                const syncService = OfflineSyncService.getInstance();
-                // You might need to implement getPendingExpenses() in your OfflineSyncService
-                // For now, we'll show empty for offline mode
                 setAllExpenses([]);
             } else {
-                // Load from Firebase Firestore
                 const expensesCollection = collection(db, 'expenses');
                 const expensesQuery = query(
                     expensesCollection,
@@ -326,17 +358,14 @@ export default function SalesExpenseScreen() {
             let allOrders: OrderData[] = [];
 
             if (connectionMode === 'offline') {
-                // Load from local storage only - ONLY PAID ORDERS
                 console.log('📱 Loading sales data from local storage...');
                 const localOrders = await syncService.getPendingReceipts();
                 allOrders = localOrders.filter(order => order.status === 'paid');
                 console.log('📱 Local sales data loaded:', allOrders.length);
             } else {
-                // Load from Firebase Firestore - ONLY PAID ORDERS
                 try {
                     console.log('🔥 Loading sales data from Firebase...');
 
-                    // Query orders collection where status is 'paid'
                     const ordersCollection = collection(db, 'orders');
                     const ordersQuery = query(
                         ordersCollection,
@@ -366,7 +395,6 @@ export default function SalesExpenseScreen() {
                 } catch (firebaseError) {
                     console.log('⚠️ Failed to load from Firebase, falling back to local storage:', firebaseError);
 
-                    // Fallback to local storage - ONLY PAID ORDERS
                     const localOrders = await syncService.getPendingReceipts();
                     allOrders = localOrders.filter(order => order.status === 'paid');
                     console.log('📱 Fallback to local sales data:', allOrders.length);
@@ -376,19 +404,18 @@ export default function SalesExpenseScreen() {
             allOrders.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
             setOrders(allOrders);
             processSalesData(allOrders);
-            calculateOverallTotals(allOrders); // Calculate overall totals
+            calculateOverallTotals(allOrders);
             console.log('✅ Final loaded sales data:', allOrders.length);
 
         } catch (error) {
             console.error('❌ Error loading sales data:', error);
-            // Final fallback - try to get from local storage and filter only paid orders
             const syncService = OfflineSyncService.getInstance();
             const localOrders = await syncService.getPendingReceipts();
             const filteredOrders = localOrders.filter(order => order.status === 'paid');
             filteredOrders.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
             setOrders(filteredOrders);
             processSalesData(filteredOrders);
-            calculateOverallTotals(filteredOrders); // Calculate overall totals for fallback
+            calculateOverallTotals(filteredOrders);
             console.log('📱 Emergency fallback to local sales data:', filteredOrders.length);
         } finally {
             setLoading(false);
@@ -495,7 +522,6 @@ export default function SalesExpenseScreen() {
     };
 
     const saveExpensesToFirebase = async () => {
-        // Validate all rows
         const validRows = expenseRows.filter(row =>
             row.description.trim() && row.cost.trim() && !isNaN(parseFloat(row.cost)) && parseFloat(row.cost) > 0
         );
@@ -512,23 +538,19 @@ export default function SalesExpenseScreen() {
 
         setSavingExpense(true);
         try {
-            // Convert to ExpenseEntry format
             const expenseEntries: ExpenseEntry[] = validRows.map(row => ({
                 description: row.description.trim(),
                 cost: parseFloat(row.cost)
             }));
 
-            // Calculate total
             const total = expenseEntries.reduce((sum, entry) => sum + entry.cost, 0);
 
-            // Create single document with all expenses
             const expenseDocument: ExpenseDocument = {
                 expenses: expenseEntries,
                 total: total,
                 timestamp: serverTimestamp()
             };
 
-            // Save to Firebase Firestore collection named "expenses"
             const expensesCollection = collection(db, 'expenses');
             await addDoc(expensesCollection, expenseDocument);
 
@@ -559,6 +581,138 @@ export default function SalesExpenseScreen() {
             const cost = parseFloat(row.cost);
             return total + (isNaN(cost) ? 0 : cost);
         }, 0);
+    };
+
+    // Function to print today's sales using connected Bluetooth printer
+    const printTodaySales = async () => {
+        // Check if Bluetooth is connected
+        if (!isBluetoothConnected || !bluetoothConnection) {
+            Alert.alert('Bluetooth Not Connected', 'Please connect to a Bluetooth printer first in Settings.');
+            return;
+        }
+
+        try {
+            console.log('🔵 Bluetooth is connected, proceeding with print...');
+            console.log('📱 Connected device:', bluetoothDeviceName);
+
+            const todayTotal = overallTotals.today;
+            const currentDate = new Date().toLocaleDateString();
+            const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+            // Create receipt content
+            const receiptContent = `
+KAPE SPOT
+------------
+DATE: ${currentDate}
+TIME: ${currentTime}
+------------
+TOTAL TODAY SALES
+₱${todayTotal.toFixed(2)}
+------------
+Thank you!
+        `.trim();
+
+            console.log('🖨️ Preparing to print to:', bluetoothDeviceName);
+            console.log('📄 Receipt content:', receiptContent);
+
+            // Send to Bluetooth printer
+            await sendToBluetoothPrinter(receiptContent);
+
+        } catch (error) {
+            console.error('❌ Error printing today sales:', error);
+            Alert.alert('Print Error', 'Failed to print today sales. Please check printer connection.');
+        }
+    };
+
+
+    // Function to send data to Bluetooth printer
+    // Function to send data to Bluetooth printer - FIXED VERSION
+    const sendToBluetoothPrinter = async (data: string) => {
+        try {
+            // Double check Bluetooth connection
+            if (!isBluetoothConnected || !bluetoothConnection) {
+                throw new Error('Bluetooth is not connected. Please connect to printer first.');
+            }
+
+            const syncService = OfflineSyncService.getInstance();
+            const bluetoothService = await syncService.getItem('bluetoothService');
+
+            if (!bluetoothService) {
+                throw new Error('Bluetooth service not found');
+            }
+
+            const serviceData = JSON.parse(bluetoothService);
+            const { peripheralId, serviceId, transfer } = serviceData;
+
+            console.log('📡 Printer details:', {
+                peripheralId,
+                serviceId,
+                transfer,
+                deviceName: bluetoothDeviceName,
+                isConnected: isBluetoothConnected
+            });
+
+            // Ensure BleManager is ready
+            try {
+                await BleManager.checkState();
+            } catch {
+                await BleManager.start({ showAlert: false });
+            }
+
+            // Thermal printer commands
+            const initializePrinter = [0x1B, 0x40];
+            const textNormal = [0x1B, 0x21, 0x00];
+            const centerAlign = [0x1B, 0x61, 0x01];
+            const lineFeed = [0x0A];
+            const paperCut = [0x1D, 0x56, 0x41, 0x10];
+
+            const textBytes = Array.from(new TextEncoder().encode(data));
+            const printData = [
+                ...initializePrinter,
+                ...centerAlign,
+                ...textBytes,
+                ...lineFeed, ...lineFeed,
+                ...paperCut
+            ];
+
+            console.log('🖨️ Sending sales data to printer');
+            console.log('🔵 Bluetooth Status:', {
+                connected: isBluetoothConnected,
+                device: bluetoothDeviceName,
+                peripheralId: peripheralId
+            });
+
+            // Send to printer
+            await BleManager.write(
+                peripheralId,
+                serviceId,
+                transfer,
+                printData,
+                printData.length
+            );
+
+            console.log('✅ Sales data printed successfully');
+            Alert.alert('Print Success', 'Today sales printed successfully!');
+
+        } catch (error) {
+            console.error('❌ Print error:', error);
+
+            let errorMessage = 'Print failed. ';
+
+            // FIXED: Proper error type checking
+            if (error instanceof Error) {
+                errorMessage += error.message;
+            } else {
+                errorMessage += 'Unknown error occurred.';
+            }
+
+            // Additional Bluetooth connection check in error
+            if (!isBluetoothConnected) {
+                errorMessage += ' Bluetooth connection lost.';
+            }
+
+            throw new Error(errorMessage);
+        }
     };
 
     useFocusEffect(
@@ -596,7 +750,6 @@ export default function SalesExpenseScreen() {
                 return;
             }
 
-            // Create the content for the txt file
             let content = 'EXPENSES REPORT\n';
             content += 'Generated on: ' + new Date().toLocaleString() + '\n';
             content += '='.repeat(50) + '\n\n';
@@ -622,12 +775,9 @@ export default function SalesExpenseScreen() {
             content += `Total Batches: ${allExpenses.length}\n`;
             content += `Total Items: ${allExpenses.reduce((total, doc) => total + doc.expenses.length, 0)}`;
 
-            // Create file name with timestamp
             const timestamp = new Date().toISOString().split('T')[0];
             const fileName = `expenses_report_${timestamp}.txt`;
 
-            // For now, just show the content in alert since file system has issues
-            // You can copy this to clipboard or show in a larger modal
             Alert.alert(
                 'Expenses Report',
                 `File: ${fileName}\n\n${content}`,
@@ -635,7 +785,6 @@ export default function SalesExpenseScreen() {
                     {
                         text: 'Copy to Clipboard',
                         onPress: () => {
-                            // You can implement clipboard functionality here if needed
                             Alert.alert('Copied', 'Report content copied to clipboard!');
                         }
                     },
@@ -643,7 +792,7 @@ export default function SalesExpenseScreen() {
                 ]
             );
 
-            console.log('Expenses Report Content:', content); // For debugging
+            console.log('Expenses Report Content:', content);
 
         } catch (error) {
             console.error('❌ Error exporting expenses:', error);
@@ -671,7 +820,7 @@ export default function SalesExpenseScreen() {
                             try {
                                 await deleteDoc(doc(db, 'expenses', expenseId));
                                 Alert.alert('Success', 'Expense batch deleted successfully!');
-                                loadAllExpenses(); // Reload the list
+                                loadAllExpenses();
                             } catch (error) {
                                 console.error('❌ Error deleting expense batch:', error);
                                 Alert.alert('Error', 'Failed to delete expense batch.');
@@ -710,14 +859,13 @@ export default function SalesExpenseScreen() {
                         onPress: async () => {
                             try {
                                 setLoadingExpenses(true);
-                                // Delete all expenses one by one
                                 const deletePromises = allExpenses.map(expense =>
                                     deleteDoc(doc(db, 'expenses', expense.id!))
                                 );
 
                                 await Promise.all(deletePromises);
                                 Alert.alert('Success', 'All expenses deleted successfully!');
-                                setAllExpenses([]); // Clear the list
+                                setAllExpenses([]);
                             } catch (error) {
                                 console.error('❌ Error deleting all expenses:', error);
                                 Alert.alert('Error', 'Failed to delete all expenses.');
@@ -764,6 +912,21 @@ export default function SalesExpenseScreen() {
                                         >
                                             <Feather name="list" size={18} color="#874E3B" />
                                         </TouchableOpacity>
+                                        {/* Printer Button */}
+                                        <TouchableOpacity
+                                            style={[
+                                                styles.printerButton,
+                                                !isBluetoothConnected && styles.printerButtonDisabled
+                                            ]}
+                                            onPress={printTodaySales}
+                                            disabled={!isBluetoothConnected}
+                                        >
+                                            <Feather
+                                                name="printer"
+                                                size={18}
+                                                color={isBluetoothConnected ? "#874E3B" : "#C4A484"}
+                                            />
+                                        </TouchableOpacity>
                                         <TouchableOpacity
                                             style={styles.reloadButton}
                                             onPress={loadOrders}
@@ -776,6 +939,23 @@ export default function SalesExpenseScreen() {
                                 <ThemedText style={styles.modeInfo}>
                                     {isOnlineMode ? '🔥 Connected to Firebase - Showing online data' : '📱 Using local storage - Showing local data'}
                                 </ThemedText>
+
+                                {/* Bluetooth Connection Status */}
+                                {isBluetoothConnected ? (
+                                    <ThemedView style={styles.bluetoothStatus}>
+                                        <Feather name="bluetooth" size={14} color="#007AFF" />
+                                        <ThemedText style={styles.bluetoothStatusText}>
+                                            Connected to {bluetoothDeviceName}
+                                        </ThemedText>
+                                    </ThemedView>
+                                ) : (
+                                    <ThemedView style={styles.bluetoothStatusOffline}>
+                                        <Feather name="bluetooth" size={14} color="#DC2626" />
+                                        <ThemedText style={styles.bluetoothStatusTextOffline}>
+                                            Bluetooth printer not connected
+                                        </ThemedText>
+                                    </ThemedView>
+                                )}
 
                                 {/* Overall Sales Totals */}
                                 <ThemedView style={styles.overallTotalsContainer}>
@@ -1191,6 +1371,53 @@ const styles = StyleSheet.create({
         padding: 16,
         borderWidth: 1,
         borderColor: '#D4A574',
+    },
+    // Printer Button Styles
+    printerButton: {
+        width: 40,
+        height: 40,
+        borderRadius: 8,
+        backgroundColor: '#F5E6D3',
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#D4A574',
+    },
+    printerButtonDisabled: {
+        backgroundColor: '#F5E6D3',
+        borderColor: '#C4A484',
+    },
+    bluetoothStatus: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#E3F2FD',
+        padding: 8,
+        borderRadius: 6,
+        marginBottom: 12,
+        borderWidth: 1,
+        borderColor: '#007AFF',
+    },
+    bluetoothStatusOffline: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#FEF2F2',
+        padding: 8,
+        borderRadius: 6,
+        marginBottom: 12,
+        borderWidth: 1,
+        borderColor: '#DC2626',
+    },
+    bluetoothStatusText: {
+        fontSize: 12,
+        color: '#007AFF',
+        marginLeft: 8,
+        fontWeight: '500',
+    },
+    bluetoothStatusTextOffline: {
+        fontSize: 12,
+        color: '#DC2626',
+        marginLeft: 8,
+        fontWeight: '500',
     },
     // Overall Totals Styles
     overallTotalsContainer: {

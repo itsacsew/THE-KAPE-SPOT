@@ -64,6 +64,8 @@ export default function Navbar({ activeNav }: NavbarProps) {
     const [confirmPassword, setConfirmPassword] = useState('');
     const [isFirebaseOnline, setIsFirebaseOnline] = useState<boolean>(false);
     const [isCheckingConnection, setIsCheckingConnection] = useState<boolean>(true);
+    const [isBluetoothConnected, setIsBluetoothConnected] = useState<boolean>(false);
+    const [bluetoothDeviceName, setBluetoothDeviceName] = useState<string>('');
 
     // Initialize Firebase
     const db = getFirestore(app);
@@ -100,7 +102,71 @@ export default function Navbar({ activeNav }: NavbarProps) {
         loadCurrentUser();
     }, []);
 
-    // Check Firebase connection status - IMPROVED VERSION
+    // Check Bluetooth connection status
+    useEffect(() => {
+        const checkBluetoothConnection = async () => {
+            try {
+                // Check if we have stored Bluetooth connection info
+                const syncService = OfflineSyncService.getInstance();
+                const bluetoothInfo = await syncService.getItem('bluetoothConnection');
+
+                if (bluetoothInfo) {
+                    const connectionData = JSON.parse(bluetoothInfo);
+                    setIsBluetoothConnected(connectionData.connected || false);
+                    setBluetoothDeviceName(connectionData.deviceName || 'Bluetooth Device');
+                }
+            } catch (error) {
+                console.error('Error checking Bluetooth connection:', error);
+            }
+        };
+
+        checkBluetoothConnection();
+
+        // Set up interval to check Bluetooth status periodically
+        const intervalId = setInterval(checkBluetoothConnection, 3000);
+
+        return () => {
+            clearInterval(intervalId);
+        };
+    }, []);
+
+    // Listen for Bluetooth connection changes
+    useEffect(() => {
+        const syncService = OfflineSyncService.getInstance();
+
+        const handleStorageChange = async (key: string, value: string | null) => {
+            if (key === 'bluetoothConnection') {
+                if (value) {
+                    try {
+                        const connectionData = JSON.parse(value);
+                        setIsBluetoothConnected(connectionData.connected || false);
+                        setBluetoothDeviceName(connectionData.deviceName || 'Bluetooth Device');
+                    } catch (error) {
+                        console.error('Error parsing Bluetooth connection data:', error);
+                    }
+                } else {
+                    setIsBluetoothConnected(false);
+                    setBluetoothDeviceName('');
+                }
+            }
+        };
+
+        // Simulate storage listener (you might need to implement this properly in your sync service)
+        const checkBluetoothStorage = async () => {
+            const bluetoothInfo = await syncService.getItem('bluetoothConnection');
+            handleStorageChange('bluetoothConnection', bluetoothInfo);
+        };
+
+        // Check initially and set up interval
+        checkBluetoothStorage();
+        const intervalId = setInterval(checkBluetoothStorage, 2000);
+
+        return () => {
+            clearInterval(intervalId);
+        };
+    }, []);
+
+    // Check Firebase connection status
     useEffect(() => {
         let isMounted = true;
 
@@ -156,7 +222,7 @@ export default function Navbar({ activeNav }: NavbarProps) {
         };
     }, []);
 
-    // Force refresh connection when component becomes visible - FIXED VERSION
+    // Force refresh connection when component becomes visible
     useEffect(() => {
         const handleFocus = () => {
             console.log('🎯 Navbar focused - refreshing connection status');
@@ -165,7 +231,6 @@ export default function Navbar({ activeNav }: NavbarProps) {
             });
         };
 
-        // Use useFocusEffect alternative for Expo Router
         const timeoutId = setTimeout(() => {
             handleFocus();
         }, 1000);
@@ -173,7 +238,7 @@ export default function Navbar({ activeNav }: NavbarProps) {
         return () => {
             clearTimeout(timeoutId);
         };
-    }, [pathname]); // Use pathname as dependency to trigger on route changes
+    }, [pathname]);
 
     useEffect(() => {
         const syncService = OfflineSyncService.getInstance();
@@ -191,11 +256,11 @@ export default function Navbar({ activeNav }: NavbarProps) {
 
     const getSyncIcon = (): { name: keyof typeof Feather.glyphMap; color: string } => {
         if (syncStatus.isSyncing) {
-            return { name: 'refresh-cw', color: '#FFA500' }; // Orange for syncing
+            return { name: 'refresh-cw', color: '#FFA500' };
         } else if (syncStatus.pendingItems > 0) {
-            return { name: 'wifi-off', color: '#DC2626' }; // Red for pending items
+            return { name: 'wifi-off', color: '#DC2626' };
         } else {
-            return { name: 'check-circle', color: '#16A34A' }; // Green for synced
+            return { name: 'check-circle', color: '#16A34A' };
         }
     };
 
@@ -348,7 +413,7 @@ export default function Navbar({ activeNav }: NavbarProps) {
         setConfirmPassword('');
     };
 
-    // Close menu when clicking outside - using Modal's onRequestClose
+    // Close menu when clicking outside
     const handleCloseMenu = () => {
         setShowAccountMenu(false);
     };
@@ -371,6 +436,12 @@ export default function Navbar({ activeNav }: NavbarProps) {
         } finally {
             setIsCheckingConnection(false);
         }
+    };
+
+    // Navigate to Bluetooth settings
+    const handleNavigateToBluetoothSettings = () => {
+        setShowAccountMenu(false);
+        router.push('/settings');
     };
 
     return (
@@ -480,7 +551,7 @@ export default function Navbar({ activeNav }: NavbarProps) {
                     {currentActiveNav === 'sales' && <ThemedView style={styles.activeIndicator} />}
                 </TouchableOpacity>
 
-                {/* Settings Button - Added next to Expenses */}
+                {/* Settings Button */}
                 <TouchableOpacity
                     style={styles.navLink}
                     onPress={() => navigateTo('/settings', 'settings')}
@@ -540,6 +611,20 @@ export default function Navbar({ activeNav }: NavbarProps) {
                     )}
                 </TouchableOpacity>
 
+                {/* Bluetooth Connection Indicator */}
+                {isBluetoothConnected && (
+                    <TouchableOpacity
+                        style={styles.bluetoothIndicator}
+                        onPress={handleNavigateToBluetoothSettings}
+                    >
+                        <Feather
+                            name="bluetooth"
+                            size={16}
+                            color="#007AFF"
+                        />
+                    </TouchableOpacity>
+                )}
+
                 {/* Account Circle with Dropdown Menu */}
                 <View style={styles.accountContainer}>
                     <TouchableOpacity
@@ -594,6 +679,19 @@ export default function Navbar({ activeNav }: NavbarProps) {
                                         </ThemedView>
 
                                         <ThemedView style={styles.menuSeparator} />
+
+                                        {/* Bluetooth Connection Status */}
+                                        {isBluetoothConnected && (
+                                            <>
+                                                <ThemedView style={styles.bluetoothStatusSection}>
+                                                    <Feather name="bluetooth" size={16} color="#007AFF" />
+                                                    <ThemedText style={styles.bluetoothStatusText}>
+                                                        Connected to {bluetoothDeviceName}
+                                                    </ThemedText>
+                                                </ThemedView>
+                                                <ThemedView style={styles.menuSeparator} />
+                                            </>
+                                        )}
 
                                         {/* Menu Options */}
                                         <TouchableOpacity
@@ -723,7 +821,6 @@ export default function Navbar({ activeNav }: NavbarProps) {
     );
 }
 
-// Styles remain the same...
 const styles = StyleSheet.create({
     navbar: {
         marginTop: 20,
@@ -886,6 +983,20 @@ const styles = StyleSheet.create({
         marginTop: 4,
         fontWeight: '500',
     },
+    bluetoothStatusSection: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#E3F2FD',
+        padding: 10,
+        borderRadius: 6,
+        marginBottom: 8,
+    },
+    bluetoothStatusText: {
+        fontSize: 12,
+        color: '#007AFF',
+        marginLeft: 8,
+        fontWeight: '500',
+    },
     menuSeparator: {
         height: 1,
         backgroundColor: '#E8D8C8',
@@ -936,6 +1047,16 @@ const styles = StyleSheet.create({
         alignItems: 'center',
     },
     firebaseIndicator: {
+        padding: 8,
+        marginLeft: 5,
+        backgroundColor: 'rgba(255, 255, 255, 0.1)',
+        borderRadius: 20,
+        width: 36,
+        height: 36,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    bluetoothIndicator: {
         padding: 8,
         marginLeft: 5,
         backgroundColor: 'rgba(255, 255, 255, 0.1)',

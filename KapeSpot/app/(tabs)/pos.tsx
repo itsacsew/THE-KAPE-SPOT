@@ -30,7 +30,7 @@ import {
     where
 } from 'firebase/firestore';
 import { app } from '@/lib/firebase-config';
-
+import BleManager from 'react-native-ble-manager';
 interface MenuItem {
     id: string;
     code: string;
@@ -92,6 +92,14 @@ interface PendingItem {
     serverId?: string;
 }
 
+interface BluetoothConnection {
+    connected: boolean;
+    deviceName: string;
+    peripheralId: string;
+    serviceId: string;
+    connectedAt: string | null;
+}
+
 export default function PosScreen() {
     const [searchQuery, setSearchQuery] = useState('');
     const [cart, setCart] = useState<MenuItem[]>([]);
@@ -107,9 +115,46 @@ export default function PosScreen() {
     const [spinAnim] = useState(new Animated.Value(0));
     const [cupCount, setCupCount] = useState(0);
     const [orderType, setOrderType] = useState<'dine-in' | 'take-out' | null>(null);
+    const [isBluetoothConnected, setIsBluetoothConnected] = useState<boolean>(false);
+    const [bluetoothDeviceName, setBluetoothDeviceName] = useState<string>('');
+    const [bluetoothConnection, setBluetoothConnection] = useState<BluetoothConnection | null>(null);
 
     // Initialize Firebase
     const db = getFirestore(app);
+
+    // Check Bluetooth connection status
+    useEffect(() => {
+        const checkBluetoothConnection = async () => {
+            try {
+                const syncService = OfflineSyncService.getInstance();
+                const bluetoothInfo = await syncService.getItem('bluetoothConnection');
+
+                if (bluetoothInfo) {
+                    const connectionData: BluetoothConnection = JSON.parse(bluetoothInfo);
+                    setIsBluetoothConnected(connectionData.connected || false);
+                    setBluetoothDeviceName(connectionData.deviceName || 'Bluetooth Device');
+                    setBluetoothConnection(connectionData);
+                } else {
+                    setIsBluetoothConnected(false);
+                    setBluetoothDeviceName('');
+                    setBluetoothConnection(null);
+                }
+            } catch (error) {
+                console.error('Error checking Bluetooth connection:', error);
+                setIsBluetoothConnected(false);
+                setBluetoothDeviceName('');
+                setBluetoothConnection(null);
+            }
+        };
+
+        checkBluetoothConnection();
+
+        const intervalId = setInterval(checkBluetoothConnection, 3000);
+
+        return () => {
+            clearInterval(intervalId);
+        };
+    }, []);
 
     // Spinning animation effect
     useEffect(() => {
@@ -357,6 +402,7 @@ export default function PosScreen() {
             };
         }, [])
     );
+
     const filteredItems = menuItems.filter(item =>
         item.name.toLowerCase().includes(searchQuery.toLowerCase()) &&
         (selectedCategory === 'All' || item.category === selectedCategory) &&
@@ -521,6 +567,7 @@ export default function PosScreen() {
             console.error('❌ Error updating Firebase item:', error);
         }
     };
+
     // Function to generate sequential order numbers that reset at 12 AM
     const generateSequentialOrderNumber = async (): Promise<string> => {
         try {
@@ -565,6 +612,7 @@ export default function PosScreen() {
             return `ORD-${Date.now()}`;
         }
     };
+
     // Function to check if we need to reset the order counter
     const checkAndResetOrderCounter = async (): Promise<void> => {
         try {
@@ -882,13 +930,174 @@ export default function PosScreen() {
         return !!item.cupName && item.cupName.trim() !== '' && item.stocks > 0;
     };
 
-    const handlePrintReceipt = () => {
-        Alert.alert('Printing Receipt', 'Receipt sent to printer!');
+    // Function to print receipt using connected Bluetooth printer - SAME LOGIC AS SALES-EXPENSE
+    const handlePrintReceipt = async () => {
+        console.log('🖨️ Starting print process...');
 
-        setTimeout(() => {
+        if (!isBluetoothConnected || !bluetoothConnection) {
+            Alert.alert('Bluetooth Not Connected', 'Please connect to a Bluetooth printer first in Settings.');
+            return;
+        }
+
+        if (!currentReceipt) {
+            Alert.alert('No Receipt', 'No receipt data available for printing.');
+            return;
+        }
+
+        try {
+            const currentDate = new Date().toLocaleDateString();
+            const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+            // Create receipt content with proper formatting
+            const receiptContent = `
+    KAPE SPOT
+    ------------
+    DATE: ${currentDate}
+    TIME: ${currentTime}
+    ORDER: ${currentReceipt.orderId}
+    CUSTOMER: ${currentReceipt.customerName}
+    TYPE: ${currentReceipt.orderType === 'dine-in' ? 'DINE IN' : 'TAKE OUT'}
+    ------------
+    ${currentReceipt.items.map(item =>
+                `${item.name.substring(0, 20)} x${item.quantity} ₱${(item.price * item.quantity).toFixed(2)}`
+            ).join('\n')}
+    ------------
+    SUBTOTAL: ₱${currentReceipt.subtotal.toFixed(2)}
+    TOTAL: ₱${currentReceipt.total.toFixed(2)}
+    ------------
+    ${currentReceipt.orderType === 'take-out' && currentReceipt.cupsUsed && currentReceipt.cupsUsed > 0 ?
+                    `CUPS: ${currentReceipt.cupsUsed}\n------------\n` : ''}
+    Thank you!
+            `.trim();
+
+            console.log('📄 Receipt content:', receiptContent);
+            console.log('🔗 Bluetooth connection:', bluetoothConnection);
+
+            // Send to Bluetooth printer
+            await sendToBluetoothPrinter(receiptContent);
+
+        } catch (error) {
+            console.error('❌ Error printing receipt:', error);
+
+            // FIXED: Proper error type checking
+            if (error instanceof Error && error.message.includes('second copy')) {
+                Alert.alert('Print Partially Complete', 'First copy printed successfully!');
+                resetAfterOrder();
+            } else {
+                Alert.alert('Print Error', 'Failed to print receipt. Please check printer connection.');
+            }
+        }
+    };
+
+    // Function to send data to Bluetooth printer - SAME LOGIC AS SALES-EXPENSE
+    const sendToBluetoothPrinter = async (data: string) => {
+        try {
+            if (!bluetoothConnection) {
+                throw new Error('No Bluetooth connection available');
+            }
+
+            // Get the Bluetooth service instance from storage
+            const syncService = OfflineSyncService.getInstance();
+            const bluetoothService = await syncService.getItem('bluetoothService');
+
+            if (!bluetoothService) {
+                throw new Error('Bluetooth service not found');
+            }
+
+            const serviceData = JSON.parse(bluetoothService);
+            const { peripheralId, serviceId, transfer } = serviceData;
+
+            console.log('📡 Printer details:', {
+                peripheralId,
+                serviceId,
+                transfer,
+                deviceName: bluetoothDeviceName
+            });
+
+            // IMPORTANT: Check if BleManager is ready
+            try {
+                await BleManager.checkState();
+                console.log('✅ BleManager is ready');
+            } catch (bleError) {
+                console.error('❌ BleManager not ready:', bleError);
+                await BleManager.start({ showAlert: false });
+                console.log('✅ BleManager started');
+            }
+
+            // Thermal printer commands for ESC/POS
+            const initializePrinter = [0x1B, 0x40]; // Initialize
+            const textNormal = [0x1B, 0x21, 0x00]; // Normal text
+            const centerAlign = [0x1B, 0x61, 0x01]; // Center alignment
+            const leftAlign = [0x1B, 0x61, 0x00]; // Left alignment
+            const lineFeed = [0x0A]; // Line feed
+            const paperCut = [0x1D, 0x56, 0x41, 0x10]; // Paper cut
+
+            // Convert data to bytes
+            const textBytes = Array.from(new TextEncoder().encode(data));
+
+            // Build complete print data
+            const printData = [
+                ...initializePrinter,
+                ...centerAlign,
+                ...textBytes,
+                ...lineFeed, ...lineFeed, ...lineFeed,
+                ...paperCut
+            ];
+
+            console.log('🖨️ Sending print data, length:', printData.length);
+
+            // Send to printer - FIRST COPY
+            await BleManager.write(
+                peripheralId,
+                serviceId,
+                transfer,
+                printData,
+                printData.length
+            );
+
+            console.log('✅ First copy printed successfully');
+            Alert.alert('Print Success', 'First copy printed! Printing second copy...');
+
+            // Wait a bit then print SECOND COPY
+            await new Promise(resolve => setTimeout(resolve, 1000));
+
+            await BleManager.write(
+                peripheralId,
+                serviceId,
+                transfer,
+                printData,
+                printData.length
+            );
+
+            console.log('✅ Second copy printed successfully');
             Alert.alert('Printing Complete', 'Two copies printed successfully!');
-            resetAfterOrder(); // USE RESET FUNCTION
-        }, 2000);
+            resetAfterOrder();
+
+        } catch (error) {
+            console.error('❌ Bluetooth print error:', error);
+
+            let errorMessage = 'Failed to connect to printer. ';
+
+            // FIXED: Proper error type checking
+            if (error instanceof Error) {
+                const errorString = error.message;
+                console.log('🔍 Error details:', errorString);
+
+                if (errorString.includes('Device not connected')) {
+                    errorMessage += 'Printer is disconnected. Please reconnect.';
+                } else if (errorString.includes('Characteristic not found')) {
+                    errorMessage += 'Printer service not found.';
+                } else if (errorString.includes('Write not permitted')) {
+                    errorMessage += 'No permission to write to printer.';
+                } else {
+                    errorMessage += `Error: ${errorString}`;
+                }
+            } else {
+                errorMessage += 'Unknown error occurred.';
+            }
+
+            throw new Error(errorMessage);
+        }
     };
 
     const getImageSource = (item: MenuItem) => {
@@ -1046,6 +1255,23 @@ export default function PosScreen() {
                 <ThemedView style={styles.content}>
                     <ThemedView style={styles.orderSection}>
                         <ThemedText style={styles.sectionTitle}>Order Summary</ThemedText>
+
+                        {/* Bluetooth Connection Status */}
+                        {isBluetoothConnected ? (
+                            <ThemedView style={styles.bluetoothStatus}>
+                                <Feather name="bluetooth" size={14} color="#007AFF" />
+                                <ThemedText style={styles.bluetoothStatusText}>
+                                    Connected to {bluetoothDeviceName}
+                                </ThemedText>
+                            </ThemedView>
+                        ) : (
+                            <ThemedView style={styles.bluetoothStatusOffline}>
+                                <Feather name="bluetooth" size={14} color="#DC2626" />
+                                <ThemedText style={styles.bluetoothStatusTextOffline}>
+                                    Bluetooth printer not connected
+                                </ThemedText>
+                            </ThemedView>
+                        )}
 
                         <ThemedView style={styles.customerInputContainer}>
                             <ThemedText style={styles.inputLabel}>Customer Name:</ThemedText>
@@ -1244,7 +1470,6 @@ export default function PosScreen() {
                                     contentContainerStyle={styles.categoriesContent}
                                 >
                                     {categories.map((category, index) => (
-                                        // I-update ang category card JSX
                                         <TouchableOpacity
                                             key={`${category.id}-${index}`}
                                             style={[
@@ -1276,7 +1501,7 @@ export default function PosScreen() {
 
                                             <Feather
                                                 name={(category.icon || 'folder') as any}
-                                                size={28} // Gi-reduce gamay ang icon size
+                                                size={28}
                                                 color={selectedCategory === category.name ? '#FFFEEA' : '#874E3B'}
                                                 style={styles.categoryIcon}
                                             />
@@ -1286,8 +1511,8 @@ export default function PosScreen() {
                                                     styles.categoryName,
                                                     selectedCategory === category.name && styles.categoryNameActive
                                                 ]}
-                                                numberOfLines={2} // Gi-limit sa 2 lines maximum
-                                                ellipsizeMode="tail" // Mag ... if mu-exceed
+                                                numberOfLines={2}
+                                                ellipsizeMode="tail"
                                             >
                                                 {category.name}
                                             </Text>
@@ -1331,7 +1556,7 @@ export default function PosScreen() {
             {showReceiptModal && currentReceipt && (
                 <ThemedView style={styles.modalOverlay}>
                     <ThemedView style={styles.receiptModal}>
-                        {/* RECEIPT HEADER - MATCHING SCREENSHOT */}
+                        {/* RECEIPT HEADER */}
                         <ThemedView style={styles.receiptHeader}>
                             <ThemedText style={styles.receiptTitle}>THE KAPE SPOT</ThemedText>
                             <ThemedText style={styles.receiptSubtitle}>THANK YOU FOR VISIT</ThemedText>
@@ -1430,8 +1655,17 @@ export default function PosScreen() {
 
                         {/* ACTIONS */}
                         <ThemedView style={styles.receiptActions}>
-                            <TouchableOpacity style={styles.printButton} onPress={handlePrintReceipt}>
-                                <ThemedText style={styles.printButtonText}>Print Receipt (2 Copies)</ThemedText>
+                            <TouchableOpacity
+                                style={[
+                                    styles.printButton,
+                                    !isBluetoothConnected && styles.printButtonDisabled
+                                ]}
+                                onPress={handlePrintReceipt}
+                                disabled={!isBluetoothConnected}
+                            >
+                                <ThemedText style={styles.printButtonText}>
+                                    {isBluetoothConnected ? 'Print Receipt (2 Copies)' : 'Printer Not Connected'}
+                                </ThemedText>
                             </TouchableOpacity>
                             <TouchableOpacity
                                 style={styles.cancelReceiptButton}
@@ -1948,6 +2182,42 @@ const styles = StyleSheet.create({
     },
     menuList: {
         flex: 1,
+    },
+    bluetoothStatus: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#E3F2FD',
+        padding: 8,
+        borderRadius: 6,
+        marginBottom: 12,
+        borderWidth: 1,
+        borderColor: '#007AFF',
+    },
+    bluetoothStatusOffline: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#FEF2F2',
+        padding: 8,
+        borderRadius: 6,
+        marginBottom: 12,
+        borderWidth: 1,
+        borderColor: '#DC2626',
+    },
+    bluetoothStatusText: {
+        fontSize: 12,
+        color: '#007AFF',
+        marginLeft: 8,
+        fontWeight: '500',
+    },
+    bluetoothStatusTextOffline: {
+        fontSize: 12,
+        color: '#DC2626',
+        marginLeft: 8,
+        fontWeight: '500',
+    },
+    printButtonDisabled: {
+        backgroundColor: '#A8A29E',
+        borderColor: '#A8A29E',
     },
     menuRow: {
         flexDirection: 'row',

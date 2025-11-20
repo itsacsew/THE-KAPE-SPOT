@@ -32,7 +32,8 @@ import {
     addDoc,
     serverTimestamp,
     deleteDoc,
-    doc
+    doc,
+    onSnapshot
 } from 'firebase/firestore';
 import { app } from '@/lib/firebase-config';
 import * as FileSystem from 'expo-file-system';
@@ -208,9 +209,137 @@ export default function SalesExpenseScreen() {
     const [isBluetoothConnected, setIsBluetoothConnected] = useState<boolean>(false);
     const [bluetoothDeviceName, setBluetoothDeviceName] = useState<string>('');
     const [bluetoothConnection, setBluetoothConnection] = useState<BluetoothConnection | null>(null);
+    const [lastUpdate, setLastUpdate] = useState<string>('');
+    const [hasFirebaseData, setHasFirebaseData] = useState<boolean>(false);
+    const [checkingFirebase, setCheckingFirebase] = useState<boolean>(false);
 
     // Initialize Firebase
     const db = getFirestore(app);
+
+    // Real-time Firebase listener for sales data and overall totals
+    useEffect(() => {
+        const setupRealTimeSalesListener = async () => {
+            try {
+                const connectionMode = await getConnectionMode();
+
+                if (connectionMode === 'online') {
+                    console.log('👂 Setting up real-time Firebase sales listener for ALL orders...');
+
+                    const ordersCollection = collection(db, 'orders');
+                    const ordersQuery = query(
+                        ordersCollection,
+                        orderBy('timestamp', 'desc')
+                    );
+
+                    // Real-time listener for sales
+                    const unsubscribe = onSnapshot(ordersQuery, (snapshot) => {
+                        console.log('🔄 Real-time sales update received from Firebase');
+
+                        const firebaseOrders: OrderData[] = [];
+
+                        snapshot.forEach((doc) => {
+                            const data = doc.data();
+                            console.log(`📊 Processing order:`, {
+                                orderId: data.orderId,
+                                status: data.status,
+                                customerName: data.customerName,
+                                total: data.total
+                            });
+
+                            const order: OrderData = {
+                                orderId: data.orderId || doc.id,
+                                customerName: data.customerName || 'Unknown Customer',
+                                items: data.items || [],
+                                subtotal: Number(data.subtotal) || 0,
+                                total: Number(data.total) || 0,
+                                timestamp: data.timestamp || data.created_at || new Date().toISOString(),
+                                status: data.status || 'paid',
+                                firebaseId: doc.id
+                            };
+
+                            firebaseOrders.push(order);
+                        });
+
+                        // Check if there's data in Firebase
+                        const hasData = firebaseOrders.length > 0;
+                        setHasFirebaseData(hasData);
+
+                        // Filter only paid orders for sales calculations
+                        const paidOrders = firebaseOrders.filter(order => order.status === 'paid');
+
+                        // Update state with new data
+                        setOrders(paidOrders);
+                        processSalesData(paidOrders);
+                        calculateOverallTotals(paidOrders);
+                        setLastUpdate(new Date().toLocaleTimeString());
+                        console.log('✅ Real-time sales updated:', {
+                            totalOrders: firebaseOrders.length,
+                            paidOrders: paidOrders.length,
+                            hasFirebaseData: hasData
+                        });
+                    });
+
+                    // Cleanup listener on unmount
+                    return () => unsubscribe();
+                } else {
+                    // Offline mode - load from local storage
+                    loadOrders();
+                }
+            } catch (error) {
+                console.log('❌ Real-time sales listener error:', error);
+                // Fallback to local storage
+                loadOrders();
+            }
+        };
+
+        setupRealTimeSalesListener();
+    }, []);
+
+    // Real-time Firebase listener for expenses
+    useEffect(() => {
+        const setupRealTimeExpensesListener = async () => {
+            try {
+                const connectionMode = await getConnectionMode();
+
+                if (connectionMode === 'online') {
+                    console.log('👂 Setting up real-time Firebase expenses listener...');
+
+                    const expensesCollection = collection(db, 'expenses');
+                    const expensesQuery = query(
+                        expensesCollection,
+                        orderBy('timestamp', 'desc')
+                    );
+
+                    // Real-time listener for expenses
+                    const unsubscribe = onSnapshot(expensesQuery, (snapshot) => {
+                        console.log('🔄 Real-time expenses update received from Firebase');
+
+                        const expensesData: ExpenseDocument[] = snapshot.docs.map(doc => {
+                            const data = doc.data();
+                            return {
+                                id: doc.id,
+                                expenses: data.expenses || [],
+                                total: data.total || 0,
+                                timestamp: data.timestamp,
+                                createdAt: data.timestamp?.toDate?.()?.toISOString() || new Date().toISOString()
+                            };
+                        });
+
+                        // Update state with new data
+                        setAllExpenses(expensesData);
+                        console.log('✅ Real-time expenses updated:', expensesData.length);
+                    });
+
+                    // Cleanup listener on unmount
+                    return () => unsubscribe();
+                }
+            } catch (error) {
+                console.log('❌ Real-time expenses listener error:', error);
+            }
+        };
+
+        setupRealTimeExpensesListener();
+    }, []);
 
     // Check Bluetooth connection status
     useEffect(() => {
@@ -313,33 +442,44 @@ export default function SalesExpenseScreen() {
         return allExpenses.reduce((total, doc) => total + doc.total, 0);
     };
 
-    // Calculate overall totals for different time periods
+    // Calculate overall totals for different time periods - UPDATED FOR REAL-TIME
     const calculateOverallTotals = (allOrders: OrderData[]) => {
         const now = new Date();
 
-        // Today
+        // Today - from start of day to now
         const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
         const todayTotal = allOrders
-            .filter(order => new Date(order.timestamp) >= todayStart)
+            .filter(order => {
+                const orderDate = new Date(order.timestamp);
+                return orderDate >= todayStart;
+            })
             .reduce((total, order) => total + order.total, 0);
 
-        // This Week
+        // This Week - last 7 days
         const weekStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
         const weekTotal = allOrders
             .filter(order => new Date(order.timestamp) >= weekStart)
             .reduce((total, order) => total + order.total, 0);
 
-        // This Month
+        // This Month - from start of current month
         const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
         const monthTotal = allOrders
             .filter(order => new Date(order.timestamp) >= monthStart)
             .reduce((total, order) => total + order.total, 0);
 
-        // This Year
+        // This Year - from start of current year
         const yearStart = new Date(now.getFullYear(), 0, 1);
         const yearTotal = allOrders
             .filter(order => new Date(order.timestamp) >= yearStart)
             .reduce((total, order) => total + order.total, 0);
+
+        console.log('📊 Overall Totals Calculated:', {
+            today: todayTotal,
+            week: weekTotal,
+            month: monthTotal,
+            year: yearTotal,
+            ordersCount: allOrders.length
+        });
 
         setOverallTotals({
             today: todayTotal,
@@ -358,18 +498,22 @@ export default function SalesExpenseScreen() {
             let allOrders: OrderData[] = [];
 
             if (connectionMode === 'offline') {
+                // Load from local storage - ALL ORDERS but filter for PAID only
                 console.log('📱 Loading sales data from local storage...');
                 const localOrders = await syncService.getPendingReceipts();
                 allOrders = localOrders.filter(order => order.status === 'paid');
                 console.log('📱 Local sales data loaded:', allOrders.length);
-            } else {
-                try {
-                    console.log('🔥 Loading sales data from Firebase...');
 
+                setHasFirebaseData(false); // Offline mode, no Firebase data
+
+            } else {
+                // Online mode - manual refresh as backup to real-time listener
+                console.log('🔥 Online mode - Manual refresh as backup...');
+
+                try {
                     const ordersCollection = collection(db, 'orders');
                     const ordersQuery = query(
                         ordersCollection,
-                        where('status', '==', 'paid'),
                         orderBy('timestamp', 'desc')
                     );
 
@@ -377,6 +521,13 @@ export default function SalesExpenseScreen() {
 
                     const firebaseOrders: OrderData[] = ordersSnapshot.docs.map(doc => {
                         const data = doc.data();
+                        console.log('🔥 Loading order from Firebase:', {
+                            orderId: data.orderId,
+                            status: data.status,
+                            customerName: data.customerName,
+                            total: data.total
+                        });
+
                         return {
                             orderId: data.orderId || doc.id,
                             customerName: data.customerName || 'Unknown Customer',
@@ -389,14 +540,24 @@ export default function SalesExpenseScreen() {
                         };
                     });
 
-                    allOrders = firebaseOrders;
-                    console.log('🔥 Firebase sales data loaded:', allOrders.length, 'paid orders');
+                    // Check if there's data in Firebase
+                    setHasFirebaseData(firebaseOrders.length > 0);
+
+                    // Filter only paid orders for sales
+                    allOrders = firebaseOrders.filter(order => order.status === 'paid');
+
+                    console.log('🔥 Firebase sales data loaded:', {
+                        totalOrders: firebaseOrders.length,
+                        paidOrders: allOrders.length,
+                        hasFirebaseData: firebaseOrders.length > 0
+                    });
 
                 } catch (firebaseError) {
                     console.log('⚠️ Failed to load from Firebase, falling back to local storage:', firebaseError);
 
                     const localOrders = await syncService.getPendingReceipts();
                     allOrders = localOrders.filter(order => order.status === 'paid');
+                    setHasFirebaseData(false);
                     console.log('📱 Fallback to local sales data:', allOrders.length);
                 }
             }
@@ -405,22 +566,71 @@ export default function SalesExpenseScreen() {
             setOrders(allOrders);
             processSalesData(allOrders);
             calculateOverallTotals(allOrders);
+            setLastUpdate(new Date().toLocaleTimeString());
             console.log('✅ Final loaded sales data:', allOrders.length);
 
         } catch (error) {
             console.error('❌ Error loading sales data:', error);
-            const syncService = OfflineSyncService.getInstance();
-            const localOrders = await syncService.getPendingReceipts();
-            const filteredOrders = localOrders.filter(order => order.status === 'paid');
-            filteredOrders.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-            setOrders(filteredOrders);
-            processSalesData(filteredOrders);
-            calculateOverallTotals(filteredOrders);
-            console.log('📱 Emergency fallback to local sales data:', filteredOrders.length);
+            // Final fallback - try to get from local storage
+            try {
+                const syncService = OfflineSyncService.getInstance();
+                const localOrders = await syncService.getPendingReceipts();
+                const filteredOrders = localOrders.filter(order => order.status === 'paid');
+                filteredOrders.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+                setOrders(filteredOrders);
+                processSalesData(filteredOrders);
+                calculateOverallTotals(filteredOrders);
+                setLastUpdate(new Date().toLocaleTimeString());
+                setHasFirebaseData(false);
+                console.log('📱 Emergency fallback to local sales data:', filteredOrders.length);
+            } catch (fallbackError) {
+                console.error('❌ Emergency fallback failed:', fallbackError);
+                setOrders([]);
+                setHasFirebaseData(false);
+            }
         } finally {
             setLoading(false);
         }
     };
+    const checkFirebaseData = async () => {
+        try {
+            const connectionMode = await getConnectionMode();
+
+            if (connectionMode === 'online') {
+                setCheckingFirebase(true);
+                const ordersCollection = collection(db, 'orders');
+                const snapshot = await getDocs(ordersCollection);
+                const hasData = !snapshot.empty;
+                setHasFirebaseData(hasData);
+                console.log('🔥 Firebase data check:', hasData ? 'Data exists' : 'No data');
+
+                if (hasData) {
+                    snapshot.forEach((doc) => {
+                        const data = doc.data();
+                        console.log('📊 Firebase order found:', {
+                            orderId: data.orderId,
+                            status: data.status,
+                            customerName: data.customerName,
+                            total: data.total
+                        });
+                    });
+                }
+            }
+        } catch (error) {
+            console.log('❌ Error checking Firebase data:', error);
+            setHasFirebaseData(false);
+        } finally {
+            setCheckingFirebase(false);
+        }
+    };
+
+    // Sa useFocusEffect, update para mo-check sa Firebase data
+    useFocusEffect(
+        React.useCallback(() => {
+            loadOrders();
+            checkFirebaseData();
+        }, [timeFilter])
+    );
 
     const processSalesData = (ordersData: OrderData[]) => {
         const now = new Date();
@@ -583,6 +793,71 @@ export default function SalesExpenseScreen() {
         }, 0);
     };
 
+    // Utility function to check if print data is too large
+    const isPrintDataTooLarge = (data: string, maxSize: number = 2000): boolean => {
+        const byteLength = new TextEncoder().encode(data).length;
+        console.log(`📊 Print data size: ${byteLength} bytes`);
+        return byteLength > maxSize;
+    };
+
+    // Helper function to generate receipt content
+    const generateExpensesReceiptContent = (): string => {
+        const currentDate = new Date().toLocaleDateString();
+        const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+        let receiptContent = `\n\n    ALL EXPENSES REPORT\n`;
+        receiptContent += `==============================\n`;
+        receiptContent += `Date: ${currentDate}\n`;
+        receiptContent += `Time: ${currentTime}\n`;
+        receiptContent += `==============================\n\n`;
+
+        allExpenses.forEach((expenseDoc, docIndex) => {
+            const batchDate = expenseDoc.createdAt ?
+                new Date(expenseDoc.createdAt).toLocaleDateString() : 'Unknown Date';
+            const batchTime = expenseDoc.createdAt ?
+                new Date(expenseDoc.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Unknown Time';
+
+            receiptContent += `BATCH ${docIndex + 1}\n`;
+            receiptContent += `Date: ${batchDate} ${batchTime}\n`;
+            receiptContent += `------------------------------\n`;
+            receiptContent += `Item                Cost\n`;
+            receiptContent += `------------------------------\n`;
+
+            expenseDoc.expenses.forEach((expense, expenseIndex) => {
+                const itemNumber = `${expenseIndex + 1}.`;
+                const description = expense.description.substring(0, 18);
+                const cost = `₱${expense.cost.toFixed(2)}`;
+
+                let line = `${itemNumber} ${description}`;
+                const targetLength = 22;
+                const currentLength = line.length;
+                if (currentLength < targetLength) {
+                    line += ' '.repeat(targetLength - currentLength);
+                }
+                line += `${cost}\n`;
+
+                receiptContent += line;
+            });
+
+            receiptContent += `------------------------------\n`;
+            receiptContent += `Batch Total: ₱${expenseDoc.total.toFixed(2)}\n\n`;
+        });
+
+        const grandTotal = getAllExpensesTotal();
+        const totalBatches = allExpenses.length;
+        const totalItems = allExpenses.reduce((total, doc) => total + doc.expenses.length, 0);
+
+        receiptContent += `==============================\n`;
+        receiptContent += `GRAND TOTAL\n`;
+        receiptContent += `Amount: ₱${grandTotal.toFixed(2)}\n`;
+        receiptContent += `Batches: ${totalBatches}\n`;
+        receiptContent += `Items: ${totalItems}\n`;
+        receiptContent += `==============================\n\n`;
+        receiptContent += `   END OF EXPENSES REPORT\n\n\n`;
+
+        return receiptContent;
+    };
+
     // Function to print today's sales using connected Bluetooth printer
     const printTodaySales = async () => {
         // Check if Bluetooth is connected
@@ -624,7 +899,7 @@ Thank you!
         }
     };
 
-    // ADD: Function to print all expenses
+    // Function to print all expenses with large data handling
     const printAllExpenses = async () => {
         // Check if Bluetooth is connected
         if (!isBluetoothConnected || !bluetoothConnection) {
@@ -641,64 +916,12 @@ Thank you!
             console.log('🔵 Bluetooth is connected, proceeding with all expenses print...');
             console.log('📱 Connected device:', bluetoothDeviceName);
 
-            const currentDate = new Date().toLocaleDateString();
-            const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
-            // Create all expenses report content
-            let receiptContent = `    ALL EXPENSES REPORT
-==============================
-Date: ${currentDate}
-Time: ${currentTime}
-==============================
-
-`;
-
-            // Add each expense batch
-            allExpenses.forEach((expenseDoc, docIndex) => {
-                const batchDate = expenseDoc.createdAt ?
-                    new Date(expenseDoc.createdAt).toLocaleDateString() : 'Unknown Date';
-                const batchTime = expenseDoc.createdAt ?
-                    new Date(expenseDoc.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Unknown Time';
-
-                receiptContent += `BATCH ${docIndex + 1}
-Date: ${batchDate}
-Time: ${batchTime}
-------------------------------
-Item                Cost
-------------------------------
-`;
-
-                // Add each expense item
-                expenseDoc.expenses.forEach((expense, expenseIndex) => {
-                    const itemNumber = `${expenseIndex + 1}.`;
-                    const description = expense.description.substring(0, 16); // Limit description length
-                    const cost = `₱${expense.cost.toFixed(2)}`;
-
-                    receiptContent += `${itemNumber} ${description}`;
-                    receiptContent += ' '.repeat(20 - (itemNumber.length + 1 + description.length));
-                    receiptContent += `${cost}\n`;
-                });
-
-                receiptContent += `------------------------------
-Batch Total: ₱${expenseDoc.total.toFixed(2)}\n\n`;
-            });
-
-            // Add grand total
-            const grandTotal = getAllExpensesTotal();
-            const totalBatches = allExpenses.length;
-            const totalItems = allExpenses.reduce((total, doc) => total + doc.expenses.length, 0);
-
-            receiptContent += `==============================
-GRAND TOTAL
-Amount: ₱${grandTotal.toFixed(2)}
-Batches: ${totalBatches}
-Items: ${totalItems}
-==============================
-
-   END OF EXPENSES REPORT`;
+            const receiptContent = generateExpensesReceiptContent();
 
             console.log('🖨️ Preparing to print all expenses to:', bluetoothDeviceName);
-            console.log('📄 All expenses content:', receiptContent);
+            console.log('📄 All expenses content length:', receiptContent.length);
+            console.log('📊 Total batches:', allExpenses.length);
+            console.log('📊 Total items:', allExpenses.reduce((total, doc) => total + doc.expenses.length, 0));
 
             // Send to Bluetooth printer
             await sendToBluetoothPrinter(receiptContent);
@@ -709,7 +932,33 @@ Items: ${totalItems}
         }
     };
 
-    // Function to send data to Bluetooth printer - FIXED VERSION
+    // Function to handle large expenses printing with confirmation
+    const printLargeExpensesInBatches = async () => {
+        if (allExpenses.length === 0) {
+            Alert.alert('No Data', 'There are no expenses to print.');
+            return;
+        }
+
+        const receiptContent = generateExpensesReceiptContent();
+
+        if (isPrintDataTooLarge(receiptContent, 1500)) {
+            Alert.alert(
+                'Large Data Detected',
+                `This report contains ${allExpenses.length} batches and ${allExpenses.reduce((total, doc) => total + doc.expenses.length, 0)} items. It might take longer to print. Continue?`,
+                [
+                    { text: 'Cancel', style: 'cancel' },
+                    {
+                        text: 'Continue',
+                        onPress: () => printAllExpenses()
+                    }
+                ]
+            );
+        } else {
+            await printAllExpenses();
+        }
+    };
+
+    // Function to send data to Bluetooth printer - UPDATED VERSION FOR LARGE DATA
     const sendToBluetoothPrinter = async (data: string) => {
         try {
             // Double check Bluetooth connection
@@ -746,35 +995,61 @@ Items: ${totalItems}
             const initializePrinter = [0x1B, 0x40];
             const textNormal = [0x1B, 0x21, 0x00];
             const centerAlign = [0x1B, 0x61, 0x01];
+            const leftAlign = [0x1B, 0x61, 0x00];
             const lineFeed = [0x0A];
             const paperCut = [0x1D, 0x56, 0x41, 0x10];
 
+            // Convert text to bytes
             const textBytes = Array.from(new TextEncoder().encode(data));
-            const printData = [
+
+            // Split data into chunks to avoid buffer overflow
+            const CHUNK_SIZE = 100; // Reduced chunk size for better reliability
+            const chunks: number[][] = [];
+
+            // Add initialization and alignment commands to first chunk
+            const firstChunk = [
                 ...initializePrinter,
                 ...centerAlign,
-                ...textBytes,
-                ...lineFeed, ...lineFeed,
-                ...paperCut
+                ...textBytes.slice(0, CHUNK_SIZE)
             ];
+            chunks.push(firstChunk);
 
-            console.log('🖨️ Sending data to printer');
+            // Create remaining chunks
+            for (let i = CHUNK_SIZE; i < textBytes.length; i += CHUNK_SIZE) {
+                chunks.push(textBytes.slice(i, i + CHUNK_SIZE));
+            }
+
+            // Add final commands to last chunk
+            const lastChunk = chunks[chunks.length - 1];
+            lastChunk.push(...lineFeed, ...lineFeed, ...paperCut);
+
+            console.log(`🖨️ Sending ${chunks.length} chunks to printer`);
             console.log('🔵 Bluetooth Status:', {
                 connected: isBluetoothConnected,
                 device: bluetoothDeviceName,
                 peripheralId: peripheralId
             });
 
-            // Send to printer
-            await BleManager.write(
-                peripheralId,
-                serviceId,
-                transfer,
-                printData,
-                printData.length
-            );
+            // Send chunks with delay between them
+            for (let i = 0; i < chunks.length; i++) {
+                const chunk = chunks[i];
+                console.log(`📦 Sending chunk ${i + 1}/${chunks.length} (${chunk.length} bytes)`);
 
-            console.log('✅ Data printed successfully');
+                await BleManager.write(
+                    peripheralId,
+                    serviceId,
+                    transfer,
+                    chunk,
+                    chunk.length
+                );
+
+                // Add small delay between chunks to prevent overwhelming the printer
+                if (i < chunks.length - 1) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+            }
+
+            console.log('✅ All data printed successfully');
             Alert.alert('Print Success', 'Report printed successfully!');
 
         } catch (error) {
@@ -782,7 +1057,7 @@ Items: ${totalItems}
 
             let errorMessage = 'Print failed. ';
 
-            // FIXED: Proper error type checking
+            // Proper error type checking
             if (error instanceof Error) {
                 errorMessage += error.message;
             } else {
@@ -1019,9 +1294,14 @@ Items: ${totalItems}
                                     </ThemedView>
                                 </ThemedView>
 
+                                {/* Sa header section, idugang ang Firebase status */}
                                 <ThemedText style={styles.modeInfo}>
-                                    {isOnlineMode ? '🔥 Connected to Firebase - Showing online data' : '📱 Using local storage - Showing local data'}
+                                    {isOnlineMode ? '🔥 Connected to Firebase - Real-time updates active' : '📱 Using local storage - Showing local data'}     {lastUpdate && (<ThemedText style={styles.lastUpdateText}>
+                                        Last update: {lastUpdate}
+                                    </ThemedText>
+                                    )}
                                 </ThemedText>
+
 
                                 {/* Bluetooth Connection Status */}
                                 {isBluetoothConnected ? (
@@ -1122,13 +1402,13 @@ Items: ${totalItems}
                                                 </ThemedText>
                                             </ThemedView>
                                             <ThemedView style={styles.modalHeaderRight}>
-                                                {/* ADD: Print Button for All Expenses */}
+                                                {/* Print Button for All Expenses */}
                                                 <TouchableOpacity
                                                     style={[
                                                         styles.printButton,
                                                         (!isBluetoothConnected || allExpenses.length === 0) && styles.printButtonDisabled
                                                     ]}
-                                                    onPress={printAllExpenses}
+                                                    onPress={printLargeExpensesInBatches}
                                                     disabled={!isBluetoothConnected || allExpenses.length === 0}
                                                 >
                                                     <Feather
@@ -1485,7 +1765,37 @@ const styles = StyleSheet.create({
         backgroundColor: '#F5E6D3',
         borderColor: '#C4A484',
     },
-    // ADD: Print Button Styles for All Expenses Modal
+    // Sa styles, idugang:
+    firebaseDataStatus: {
+        fontSize: 12,
+        fontWeight: '600',
+        marginTop: 4,
+        textAlign: 'center',
+    },
+    firebaseDataExists: {
+        color: '#16A34A',
+    },
+    firebaseDataEmpty: {
+        color: '#DC2626',
+    },
+    checkingFirebaseContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#FEF3C7',
+        padding: 8,
+        borderRadius: 6,
+        marginBottom: 8,
+        borderWidth: 1,
+        borderColor: '#D97706',
+    },
+    checkingFirebaseText: {
+        fontSize: 12,
+        color: '#92400E',
+        marginLeft: 8,
+        fontWeight: '500',
+    },
+    // Print Button Styles for All Expenses Modal
     printButton: {
         width: 40,
         height: 40,
@@ -1531,6 +1841,15 @@ const styles = StyleSheet.create({
         color: '#DC2626',
         marginLeft: 8,
         fontWeight: '500',
+    },
+    // Last Update Text
+    lastUpdateText: {
+        fontSize: 11,
+        color: '#8B7355',
+        fontStyle: 'italic',
+        marginBottom: 8,
+        textAlign: 'center',
+        fontWeight: 'bold'
     },
     // Overall Totals Styles
     overallTotalsContainer: {

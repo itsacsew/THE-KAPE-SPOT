@@ -7,7 +7,8 @@ import {
     Alert,
     Modal,
     TouchableWithoutFeedback,
-    TextInput
+    TextInput,
+    useWindowDimensions
 } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -51,6 +52,7 @@ interface User {
 export default function Navbar({ activeNav }: NavbarProps) {
     const router = useRouter();
     const pathname = usePathname();
+    const { width: screenWidth } = useWindowDimensions();
     const [syncStatus, setSyncStatus] = useState<SyncStatus>({
         isSyncing: false,
         lastSync: null,
@@ -66,6 +68,10 @@ export default function Navbar({ activeNav }: NavbarProps) {
     const [isCheckingConnection, setIsCheckingConnection] = useState<boolean>(true);
     const [isBluetoothConnected, setIsBluetoothConnected] = useState<boolean>(false);
     const [bluetoothDeviceName, setBluetoothDeviceName] = useState<string>('');
+
+    // Determine if we should use compact layout
+    const isSmallScreen = screenWidth < 768; // Tablet breakpoint
+    const isVerySmallScreen = screenWidth < 480; // Phone breakpoint
 
     // Initialize Firebase
     const db = getFirestore(app);
@@ -106,7 +112,6 @@ export default function Navbar({ activeNav }: NavbarProps) {
     useEffect(() => {
         const checkBluetoothConnection = async () => {
             try {
-                // Check if we have stored Bluetooth connection info
                 const syncService = OfflineSyncService.getInstance();
                 const bluetoothInfo = await syncService.getItem('bluetoothConnection');
 
@@ -121,8 +126,6 @@ export default function Navbar({ activeNav }: NavbarProps) {
         };
 
         checkBluetoothConnection();
-
-        // Set up interval to check Bluetooth status periodically
         const intervalId = setInterval(checkBluetoothConnection, 3000);
 
         return () => {
@@ -151,13 +154,11 @@ export default function Navbar({ activeNav }: NavbarProps) {
             }
         };
 
-        // Simulate storage listener (you might need to implement this properly in your sync service)
         const checkBluetoothStorage = async () => {
             const bluetoothInfo = await syncService.getItem('bluetoothConnection');
             handleStorageChange('bluetoothConnection', bluetoothInfo);
         };
 
-        // Check initially and set up interval
         checkBluetoothStorage();
         const intervalId = setInterval(checkBluetoothStorage, 2000);
 
@@ -195,10 +196,8 @@ export default function Navbar({ activeNav }: NavbarProps) {
             }
         };
 
-        // Initial check
         checkFirebaseConnection();
 
-        // Listen for connection changes with improved error handling
         const connectionListener = (isConnected: boolean, mode: 'online' | 'offline') => {
             if (!isMounted) return;
 
@@ -208,7 +207,6 @@ export default function Navbar({ activeNav }: NavbarProps) {
 
         NetworkScanner.addConnectionListener(connectionListener);
 
-        // Add periodic connection check (every 10 seconds)
         const intervalId = setInterval(() => {
             if (isMounted) {
                 checkFirebaseConnection();
@@ -290,17 +288,11 @@ export default function Navbar({ activeNav }: NavbarProps) {
                     style: 'destructive',
                     onPress: async () => {
                         try {
-                            // Sign out from Firebase Auth
                             await auth.signOut();
-
-                            // Use AsyncStorage directly to remove the currentUser
                             await AsyncStorage.removeItem('currentUser');
                             setCurrentUser(null);
                             setShowAccountMenu(false);
-
-                            // Redirect to login screen
                             router.replace('/login');
-
                             Alert.alert('Logged Out', 'You have been successfully logged out.');
                         } catch (error) {
                             console.error('Logout error:', error);
@@ -354,9 +346,7 @@ export default function Navbar({ activeNav }: NavbarProps) {
             const user = JSON.parse(userData);
             const currentAuthUser = auth.currentUser;
 
-            // Check if we're online with Firebase
             if (!currentAuthUser) {
-                // Offline mode - save to local storage only
                 Alert.alert(
                     'Offline Mode',
                     'Cannot change password while offline. Please connect to the internet to change your password.',
@@ -365,23 +355,17 @@ export default function Navbar({ activeNav }: NavbarProps) {
                 return;
             }
 
-            // Online mode - update password in Firebase Auth
             try {
-                // Re-authenticate user first
                 const credential = EmailAuthProvider.credential(
                     currentAuthUser.email || `${user.username}@kapespot.com`,
                     currentPassword
                 );
 
                 await reauthenticateWithCredential(currentAuthUser, credential);
-
-                // Update password
                 await updatePassword(currentAuthUser, newPassword);
 
                 Alert.alert('Success', 'Password changed successfully');
                 setShowChangePassword(false);
-
-                // Clear password fields
                 setCurrentPassword('');
                 setNewPassword('');
                 setConfirmPassword('');
@@ -413,17 +397,14 @@ export default function Navbar({ activeNav }: NavbarProps) {
         setConfirmPassword('');
     };
 
-    // Close menu when clicking outside
     const handleCloseMenu = () => {
         setShowAccountMenu(false);
     };
 
-    // Check Firebase connectivity
     const checkFirebaseOnline = () => {
         return isFirebaseOnline;
     };
 
-    // Manual connection refresh
     const handleRefreshConnection = async () => {
         console.log('🔄 Manually refreshing connection...');
         setIsCheckingConnection(true);
@@ -438,285 +419,256 @@ export default function Navbar({ activeNav }: NavbarProps) {
         }
     };
 
-    // Navigate to Bluetooth settings
     const handleNavigateToBluetoothSettings = () => {
         setShowAccountMenu(false);
         router.push('/settings');
     };
 
-    return (
-        <ThemedView style={styles.navbar}>
-            <ThemedText style={styles.navbarTitle}>
-                THE <ThemedText style={styles.sectionTitle1}>KAPE </ThemedText> SPOT
-            </ThemedText>
+    // Render navigation items with responsive layout
+    const renderNavItems = () => {
+        const navItems = [
+            { key: 'pos', route: '/pos', icon: 'shopping-cart', label: 'POS' },
+            { key: 'order-status', route: '/orderStatus', icon: 'clipboard', label: 'Order' },
+            { key: 'items', route: '/items', icon: 'package', label: 'Inventory' },
+            { key: 'log', route: '/log', icon: 'users', label: 'Log' },
+            { key: 'sales', route: '/sales-expense', icon: 'bar-chart-2', label: 'Expenses' },
+            { key: 'settings', route: '/settings', icon: 'settings', label: 'Settings' },
+        ];
 
-            <View style={styles.navbarContent}>
+        return navItems.map((item) => (
+            <TouchableOpacity
+                key={item.key}
+                style={[
+                    styles.navLink,
+                    isVerySmallScreen && styles.navLinkCompact
+                ]}
+                onPress={() => navigateTo(item.route as any, item.key)}
+            >
+                <Feather
+                    name={item.icon as keyof typeof Feather.glyphMap}
+                    size={isVerySmallScreen ? 16 : 20}
+                    color="#FFFEEA"
+                    style={styles.navIcon}
+                />
+                {(!isVerySmallScreen || currentActiveNav === item.key) && (
+                    <ThemedText style={[
+                        styles.navLinkText,
+                        isVerySmallScreen && styles.navLinkTextCompact,
+                        currentActiveNav === item.key && styles.activeNavLinkText
+                    ]}>
+                        {isVerySmallScreen && currentActiveNav === item.key ? item.label :
+                            isVerySmallScreen ? '' : item.label}
+                    </ThemedText>
+                )}
+                {currentActiveNav === item.key && <ThemedView style={styles.activeIndicator} />}
+            </TouchableOpacity>
+        ));
+    };
+
+    return (
+        <ThemedView style={[
+            styles.navbar,
+            isSmallScreen && styles.navbarCompact
+        ]}>
+            {/* Logo Section - Hidden on very small screens */}
+            {!isVerySmallScreen && (
+                <ThemedText style={[
+                    styles.navbarTitle,
+                    isSmallScreen && styles.navbarTitleCompact
+                ]}>
+                    THE <ThemedText style={styles.sectionTitle1}>KAPE </ThemedText> SPOT
+                </ThemedText>
+            )}
+
+
+            <View style={[
+                styles.navbarContent,
+                isVerySmallScreen && styles.navbarContentCompact
+            ]}>
+                {/* Navigation Items */}
                 <ScrollView
                     horizontal
                     showsHorizontalScrollIndicator={false}
                     style={styles.navbarScroll}
-                    contentContainerStyle={styles.scrollContent}
-                ></ScrollView>
-                <TouchableOpacity
-                    style={styles.navLink}
-                    onPress={() => navigateTo('/pos', 'pos')}
+                    contentContainerStyle={[
+                        styles.scrollContent,
+                        isVerySmallScreen && styles.scrollContentCompact
+                    ]}
                 >
-                    <Feather
-                        name="shopping-cart"
-                        size={20}
-                        color={currentActiveNav === 'pos' ? '#FFFEEA' : '#FFFEEA'}
-                        style={styles.navIcon}
-                    />
-                    <ThemedText style={[
-                        styles.navLinkText,
-                        currentActiveNav === 'pos' && styles.activeNavLinkText
-                    ]}>
-                        POS
-                    </ThemedText>
-                    {currentActiveNav === 'pos' && <ThemedView style={styles.activeIndicator} />}
-                </TouchableOpacity>
-                <TouchableOpacity
-                    style={styles.navLink}
-                    onPress={() => navigateTo('/orderStatus', 'order-status')}
-                >
-                    <Feather
-                        name="clipboard"
-                        size={20}
-                        color={currentActiveNav === 'order-status' ? '#FFFEEA' : '#FFFEEA'}
-                        style={styles.navIcon}
-                    />
-                    <ThemedText style={[
-                        styles.navLinkText,
-                        currentActiveNav === 'order-status' && styles.activeNavLinkText
-                    ]}>
-                        Order
-                    </ThemedText>
-                    {currentActiveNav === 'order-status' && <ThemedView style={styles.activeIndicator} />}
-                </TouchableOpacity>
+                    {renderNavItems()}
+                </ScrollView>
 
-                <TouchableOpacity
-                    style={styles.navLink}
-                    onPress={() => navigateTo('/items', 'items')}
-                >
-                    <Feather
-                        name="package"
-                        size={20}
-                        color={currentActiveNav === 'items' ? '#FFFEEA' : '#FFFEEA'}
-                        style={styles.navIcon}
-                    />
-                    <ThemedText style={[
-                        styles.navLinkText,
-                        currentActiveNav === 'items' && styles.activeNavLinkText
-                    ]}>
-                        Inventory
-                    </ThemedText>
-                    {currentActiveNav === 'items' && <ThemedView style={styles.activeIndicator} />}
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                    style={styles.navLink}
-                    onPress={() => navigateTo('/log', 'log')}
-                >
-                    <Feather
-                        name="users"
-                        size={20}
-                        color={currentActiveNav === 'log' ? '#FFFEEA' : '#FFFEEA'}
-                        style={styles.navIcon}
-                    />
-                    <ThemedText style={[
-                        styles.navLinkText,
-                        currentActiveNav === 'log' && styles.activeNavLinkText
-                    ]}>
-                        Log
-                    </ThemedText>
-                    {currentActiveNav === 'log' && <ThemedView style={styles.activeIndicator} />}
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                    style={styles.navLink}
-                    onPress={() => navigateTo('/sales-expense', 'sales')}
-                >
-                    <Feather
-                        name="bar-chart-2"
-                        size={20}
-                        color={currentActiveNav === 'sales' ? '#FFFEEA' : '#FFFEEA'}
-                        style={styles.navIcon}
-                    />
-                    <ThemedText style={[
-                        styles.navLinkText,
-                        currentActiveNav === 'sales' && styles.activeNavLinkText
-                    ]}>
-                        Expenses
-                    </ThemedText>
-                    {currentActiveNav === 'sales' && <ThemedView style={styles.activeIndicator} />}
-                </TouchableOpacity>
-
-                {/* Settings Button */}
-                <TouchableOpacity
-                    style={styles.navLink}
-                    onPress={() => navigateTo('/settings', 'settings')}
-                >
-                    <Feather
-                        name="settings"
-                        size={20}
-                        color={currentActiveNav === 'settings' ? '#FFFEEA' : '#FFFEEA'}
-                        style={styles.navIcon}
-                    />
-                    <ThemedText style={[
-                        styles.navLinkText,
-                        currentActiveNav === 'settings' && styles.activeNavLinkText
-                    ]}>
-                        Settings
-                    </ThemedText>
-                    {currentActiveNav === 'settings' && <ThemedView style={styles.activeIndicator} />}
-                </TouchableOpacity>
-
-                {/* Sync Indicator */}
-                <TouchableOpacity
-                    style={styles.syncIndicator}
-                    onPress={handleManualSync}
-                >
-                    <Feather
-                        name={syncIcon.name}
-                        size={16}
-                        color={syncIcon.color}
-                    />
-                    {syncStatus.pendingItems > 0 && (
-                        <ThemedView style={styles.pendingBadge}>
-                            <ThemedText style={styles.pendingText}>
-                                {syncStatus.pendingItems > 9 ? '9+' : syncStatus.pendingItems}
-                            </ThemedText>
-                        </ThemedView>
-                    )}
-                </TouchableOpacity>
-
-                {/* Firebase Online Indicator */}
-                <TouchableOpacity
-                    style={styles.firebaseIndicator}
-                    onPress={handleRefreshConnection}
-                    disabled={isCheckingConnection}
-                >
-                    {isCheckingConnection ? (
-                        <Feather
-                            name="refresh-cw"
-                            size={16}
-                            color="#FFA500"
-                        />
-                    ) : (
-                        <Feather
-                            name={checkFirebaseOnline() ? "wifi" : "wifi-off"}
-                            size={16}
-                            color={checkFirebaseOnline() ? '#16A34A' : '#DC2626'}
-                        />
-                    )}
-                </TouchableOpacity>
-
-                {/* Bluetooth Connection Indicator */}
-                {isBluetoothConnected && (
-                    <TouchableOpacity
-                        style={styles.bluetoothIndicator}
-                        onPress={handleNavigateToBluetoothSettings}
-                    >
-                        <Feather
-                            name="bluetooth"
-                            size={16}
-                            color="#007AFF"
-                        />
-                    </TouchableOpacity>
-                )}
-
-                {/* Account Circle with Dropdown Menu */}
-                <View style={styles.accountContainer}>
+                {/* Indicators Section */}
+                <View style={[
+                    styles.indicatorsContainer,
+                    isVerySmallScreen && styles.indicatorsContainerCompact
+                ]}>
+                    {/* Sync Indicator */}
                     <TouchableOpacity
                         style={[
-                            styles.accountCircle,
-                            showAccountMenu && styles.accountCircleActive
+                            styles.syncIndicator,
+                            isVerySmallScreen && styles.indicatorCompact
                         ]}
-                        onPress={handleAccountPress}
+                        onPress={handleManualSync}
                     >
                         <Feather
-                            name="user"
-                            size={20}
-                            color="#874E3B"
+                            name={syncIcon.name}
+                            size={isVerySmallScreen ? 14 : 16}
+                            color={syncIcon.color}
                         />
-                        {currentActiveNav === 'account' && <ThemedView style={styles.activeIndicator} />}
+                        {syncStatus.pendingItems > 0 && (
+                            <ThemedView style={styles.pendingBadge}>
+                                <ThemedText style={styles.pendingText}>
+                                    {syncStatus.pendingItems > 9 ? '9+' : syncStatus.pendingItems}
+                                </ThemedText>
+                            </ThemedView>
+                        )}
                     </TouchableOpacity>
 
-                    {/* Account Dropdown Menu using Modal for proper overlay */}
-                    <Modal
-                        visible={showAccountMenu}
-                        transparent={true}
-                        animationType="fade"
-                        onRequestClose={handleCloseMenu}
+                    {/* Firebase Online Indicator */}
+                    <TouchableOpacity
+                        style={[
+                            styles.firebaseIndicator,
+                            isVerySmallScreen && styles.indicatorCompact
+                        ]}
+                        onPress={handleRefreshConnection}
+                        disabled={isCheckingConnection}
                     >
-                        <TouchableWithoutFeedback onPress={handleCloseMenu}>
-                            <View style={styles.modalOverlay}>
-                                <TouchableWithoutFeedback>
-                                    <ThemedView style={styles.accountMenu}>
-                                        {/* User Info Section */}
-                                        <ThemedView style={styles.userInfoSection}>
-                                            <ThemedView style={styles.userAvatar}>
-                                                <Feather name="user" size={24} color="#874E3B" />
-                                            </ThemedView>
-                                            <ThemedView style={styles.userDetails}>
-                                                <ThemedText style={styles.userName}>
-                                                    {currentUser?.name || 'User'}
-                                                </ThemedText>
-                                                <ThemedText style={styles.userRole}>
-                                                    {currentUser?.role ? `${currentUser.role.charAt(0).toUpperCase() + currentUser.role.slice(1)}` : 'Role'}
-                                                </ThemedText>
-                                                <ThemedText style={styles.userUsername}>
-                                                    @{currentUser?.username || 'username'}
-                                                </ThemedText>
-                                                <ThemedText style={[
-                                                    styles.connectionStatus,
-                                                    { color: checkFirebaseOnline() ? '#16A34A' : '#DC2626' }
+                        {isCheckingConnection ? (
+                            <Feather
+                                name="refresh-cw"
+                                size={isVerySmallScreen ? 14 : 16}
+                                color="#FFA500"
+                            />
+                        ) : (
+                            <Feather
+                                name={checkFirebaseOnline() ? "wifi" : "wifi-off"}
+                                size={isVerySmallScreen ? 14 : 16}
+                                color={checkFirebaseOnline() ? '#16A34A' : '#DC2626'}
+                            />
+                        )}
+                    </TouchableOpacity>
+
+                    {/* Bluetooth Connection Indicator */}
+                    {isBluetoothConnected && (
+                        <TouchableOpacity
+                            style={[
+                                styles.bluetoothIndicator,
+                                isVerySmallScreen && styles.indicatorCompact
+                            ]}
+                            onPress={handleNavigateToBluetoothSettings}
+                        >
+                            <Feather
+                                name="bluetooth"
+                                size={isVerySmallScreen ? 14 : 16}
+                                color="#007AFF"
+                            />
+                        </TouchableOpacity>
+                    )}
+
+                    {/* Account Circle with Dropdown Menu */}
+                    <View style={styles.accountContainer}>
+                        <TouchableOpacity
+                            style={[
+                                styles.accountCircle,
+                                isVerySmallScreen && styles.accountCircleCompact,
+                                showAccountMenu && styles.accountCircleActive
+                            ]}
+                            onPress={handleAccountPress}
+                        >
+                            <Feather
+                                name="user"
+                                size={isVerySmallScreen ? 16 : 20}
+                                color="#874E3B"
+                            />
+                            {currentActiveNav === 'account' && <ThemedView style={styles.activeIndicator} />}
+                        </TouchableOpacity>
+
+                        {/* Account Dropdown Menu */}
+                        <Modal
+                            visible={showAccountMenu}
+                            transparent={true}
+                            animationType="fade"
+                            onRequestClose={handleCloseMenu}
+                        >
+                            <TouchableWithoutFeedback onPress={handleCloseMenu}>
+                                <View style={styles.modalOverlay}>
+                                    <TouchableWithoutFeedback>
+                                        <ThemedView style={[
+                                            styles.accountMenu,
+                                            isSmallScreen && styles.accountMenuCompact
+                                        ]}>
+                                            {/* User Info Section */}
+                                            <ThemedView style={styles.userInfoSection}>
+                                                <ThemedView style={[
+                                                    styles.userAvatar,
+                                                    isSmallScreen && styles.userAvatarCompact
                                                 ]}>
-                                                    {isCheckingConnection ? '🟡 Checking...' :
-                                                        checkFirebaseOnline() ? '🟢 Firebase Online' : '🔴 Firebase Offline'}
-                                                </ThemedText>
-                                            </ThemedView>
-                                        </ThemedView>
-
-                                        <ThemedView style={styles.menuSeparator} />
-
-                                        {/* Bluetooth Connection Status */}
-                                        {isBluetoothConnected && (
-                                            <>
-                                                <ThemedView style={styles.bluetoothStatusSection}>
-                                                    <Feather name="bluetooth" size={16} color="#007AFF" />
-                                                    <ThemedText style={styles.bluetoothStatusText}>
-                                                        Connected to {bluetoothDeviceName}
+                                                    <Feather name="user" size={isSmallScreen ? 20 : 24} color="#874E3B" />
+                                                </ThemedView>
+                                                <ThemedView style={styles.userDetails}>
+                                                    <ThemedText style={[
+                                                        styles.userName,
+                                                        isSmallScreen && styles.userNameCompact
+                                                    ]}>
+                                                        {currentUser?.name || 'User'}
+                                                    </ThemedText>
+                                                    <ThemedText style={styles.userRole}>
+                                                        {currentUser?.role ? `${currentUser.role.charAt(0).toUpperCase() + currentUser.role.slice(1)}` : 'Role'}
+                                                    </ThemedText>
+                                                    <ThemedText style={styles.userUsername}>
+                                                        @{currentUser?.username || 'username'}
+                                                    </ThemedText>
+                                                    <ThemedText style={[
+                                                        styles.connectionStatus,
+                                                        { color: checkFirebaseOnline() ? '#16A34A' : '#DC2626' }
+                                                    ]}>
+                                                        {isCheckingConnection ? '🟡 Checking...' :
+                                                            checkFirebaseOnline() ? '🟢 Firebase Online' : '🔴 Firebase Offline'}
                                                     </ThemedText>
                                                 </ThemedView>
-                                                <ThemedView style={styles.menuSeparator} />
-                                            </>
-                                        )}
+                                            </ThemedView>
 
-                                        {/* Menu Options */}
-                                        <TouchableOpacity
-                                            style={styles.menuItem}
-                                            onPress={handleChangePassword}
-                                        >
-                                            <Feather name="lock" size={16} color="#874E3B" />
-                                            <ThemedText style={styles.menuItemText}>Change Password</ThemedText>
-                                        </TouchableOpacity>
+                                            <ThemedView style={styles.menuSeparator} />
 
-                                        <ThemedView style={styles.menuSeparator} />
+                                            {/* Bluetooth Connection Status */}
+                                            {isBluetoothConnected && (
+                                                <>
+                                                    <ThemedView style={styles.bluetoothStatusSection}>
+                                                        <Feather name="bluetooth" size={16} color="#007AFF" />
+                                                        <ThemedText style={styles.bluetoothStatusText}>
+                                                            Connected to {bluetoothDeviceName}
+                                                        </ThemedText>
+                                                    </ThemedView>
+                                                    <ThemedView style={styles.menuSeparator} />
+                                                </>
+                                            )}
 
-                                        {/* Logout Option */}
-                                        <TouchableOpacity
-                                            style={[styles.menuItem, styles.logoutMenuItem]}
-                                            onPress={handleLogout}
-                                        >
-                                            <Feather name="log-out" size={16} color="#DC2626" />
-                                            <ThemedText style={[styles.menuItemText, styles.logoutText]}>Logout</ThemedText>
-                                        </TouchableOpacity>
-                                    </ThemedView>
-                                </TouchableWithoutFeedback>
-                            </View>
-                        </TouchableWithoutFeedback>
-                    </Modal>
+                                            {/* Menu Options */}
+                                            <TouchableOpacity
+                                                style={styles.menuItem}
+                                                onPress={handleChangePassword}
+                                            >
+                                                <Feather name="lock" size={16} color="#874E3B" />
+                                                <ThemedText style={styles.menuItemText}>Change Password</ThemedText>
+                                            </TouchableOpacity>
+
+                                            <ThemedView style={styles.menuSeparator} />
+
+                                            {/* Logout Option */}
+                                            <TouchableOpacity
+                                                style={[styles.menuItem, styles.logoutMenuItem]}
+                                                onPress={handleLogout}
+                                            >
+                                                <Feather name="log-out" size={16} color="#DC2626" />
+                                                <ThemedText style={[styles.menuItemText, styles.logoutText]}>Logout</ThemedText>
+                                            </TouchableOpacity>
+                                        </ThemedView>
+                                    </TouchableWithoutFeedback>
+                                </View>
+                            </TouchableWithoutFeedback>
+                        </Modal>
+                    </View>
                 </View>
             </View>
 
@@ -730,7 +682,10 @@ export default function Navbar({ activeNav }: NavbarProps) {
                 <TouchableWithoutFeedback onPress={handleClosePasswordModal}>
                     <View style={styles.modalOverlay}>
                         <TouchableWithoutFeedback>
-                            <ThemedView style={styles.changePasswordModal}>
+                            <ThemedView style={[
+                                styles.changePasswordModal,
+                                isSmallScreen && styles.changePasswordModalCompact
+                            ]}>
                                 <ThemedText style={styles.changePasswordTitle}>Change Password</ThemedText>
 
                                 <ThemedView style={styles.connectionInfo}>
@@ -841,6 +796,12 @@ const styles = StyleSheet.create({
         marginRight: 5,
         alignItems: 'center',
         zIndex: 1000,
+        minHeight: 70,
+    },
+    navbarCompact: {
+        paddingHorizontal: 15,
+        paddingVertical: 10,
+        minHeight: 60,
     },
     navbarTitle: {
         fontSize: 30,
@@ -848,34 +809,60 @@ const styles = StyleSheet.create({
         color: '#FFFEEA',
         marginRight: 20,
         marginLeft: 30,
-        lineHeight: 40
+        lineHeight: 40,
+        flexShrink: 1,
+    },
+    navbarTitleCompact: {
+        fontSize: 24,
+        marginRight: 15,
+        marginLeft: 15,
+        lineHeight: 32,
     },
     navbarContent: {
         flex: 1,
         flexDirection: 'row',
         alignItems: 'center',
+        justifyContent: 'space-between',
+    },
+    navbarContentCompact: {
+        flexDirection: 'row',
     },
     navbarScroll: {
         flex: 1,
+        marginLeft: 90,
     },
     scrollContent: {
         flexGrow: 1,
         alignItems: 'center',
+        flexDirection: 'row',
+    },
+    scrollContentCompact: {
+        justifyContent: 'flex-start',
     },
     navLink: {
-        paddingHorizontal: 15,
-        paddingVertical: 10,
+        paddingHorizontal: 12,
+        paddingVertical: 8,
         position: 'relative',
         alignItems: 'center',
         flexDirection: 'row',
+        minWidth: 60,
+    },
+    navLinkCompact: {
+        paddingHorizontal: 8,
+        paddingVertical: 6,
+        minWidth: 40,
     },
     navIcon: {
-        marginRight: 8,
+        marginRight: 6,
     },
     navLinkText: {
-        fontSize: 17,
+        fontSize: 16,
         fontFamily: 'LobsterTwoRegular',
         color: '#FFFEEA',
+        flexShrink: 1,
+    },
+    navLinkTextCompact: {
+        fontSize: 12,
     },
     activeNavLinkText: {
         color: '#FFFEEA',
@@ -894,9 +881,18 @@ const styles = StyleSheet.create({
         borderTopLeftRadius: 2,
         borderTopRightRadius: 2,
     },
+    indicatorsContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginLeft: 10,
+        flexShrink: 0,
+    },
+    indicatorsContainerCompact: {
+        marginLeft: 5,
+    },
     accountContainer: {
         position: 'relative',
-        marginLeft: 10,
+        marginLeft: 5,
     },
     accountCircle: {
         width: 40,
@@ -911,6 +907,11 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.1,
         shadowRadius: 3,
         elevation: 3,
+    },
+    accountCircleCompact: {
+        width: 32,
+        height: 32,
+        borderRadius: 16,
     },
     accountCircleActive: {
         backgroundColor: '#F5E6D3',
@@ -942,6 +943,10 @@ const styles = StyleSheet.create({
         zIndex: 1001,
         padding: 16,
     },
+    accountMenuCompact: {
+        width: 250,
+        padding: 12,
+    },
     userInfoSection: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -958,6 +963,11 @@ const styles = StyleSheet.create({
         borderWidth: 2,
         borderColor: '#D4A574',
     },
+    userAvatarCompact: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+    },
     userDetails: {
         flex: 1,
     },
@@ -966,6 +976,9 @@ const styles = StyleSheet.create({
         fontWeight: 'bold',
         color: '#874E3B',
         marginBottom: 2,
+    },
+    userNameCompact: {
+        fontSize: 14,
     },
     userRole: {
         fontSize: 12,
@@ -1038,7 +1051,7 @@ const styles = StyleSheet.create({
     syncIndicator: {
         padding: 8,
         position: 'relative',
-        marginLeft: 10,
+        marginLeft: 5,
         backgroundColor: 'rgba(255, 255, 255, 0.1)',
         borderRadius: 20,
         width: 36,
@@ -1065,6 +1078,11 @@ const styles = StyleSheet.create({
         height: 36,
         justifyContent: 'center',
         alignItems: 'center',
+    },
+    indicatorCompact: {
+        width: 32,
+        height: 32,
+        padding: 6,
     },
     pendingBadge: {
         position: 'absolute',
@@ -1097,6 +1115,10 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.2,
         shadowRadius: 8,
         elevation: 8,
+    },
+    changePasswordModalCompact: {
+        width: 300,
+        padding: 20,
     },
     changePasswordTitle: {
         fontSize: 20,

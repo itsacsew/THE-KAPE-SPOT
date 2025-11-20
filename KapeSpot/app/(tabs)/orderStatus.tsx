@@ -9,7 +9,8 @@ import {
     Alert,
     Modal,
     Dimensions,
-    Text
+    Text,
+    ActivityIndicator
 } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -27,7 +28,8 @@ import {
     doc,
     query,
     where,
-    orderBy
+    orderBy,
+    onSnapshot // ADDED: for realtime updates
 } from 'firebase/firestore';
 import { app } from '@/lib/firebase-config';
 
@@ -56,7 +58,7 @@ interface OrderData {
 const { width } = Dimensions.get('window');
 const CARD_MARGIN = 3.7;
 const CARD_WIDTH = (width - (CARD_MARGIN * 20)) / 4;
-// orderStatus.tsx - Add this helper function
+
 export const getOrderNumberIndicator = (orders: OrderData[], orderId: string) => {
     const index = orders.findIndex(order => order.orderId === orderId);
     return (index + 1).toString().padStart(2, '0');
@@ -69,6 +71,11 @@ export default function OrderStatusScreen() {
     const [selectedOrder, setSelectedOrder] = useState<OrderData | null>(null);
     const [showActionModal, setShowActionModal] = useState(false);
     const [selectedOrderType, setSelectedOrderType] = useState<'all' | 'dine-in' | 'take-out'>('all');
+    const [isProcessing, setIsProcessing] = useState(false);
+    const [unsubscribe, setUnsubscribe] = useState<(() => void) | null>(null); // ADDED: unsubscribe function for realtime listener
+    const [hasFirebaseData, setHasFirebaseData] = useState<boolean>(false);
+    const [checkingFirebase, setCheckingFirebase] = useState<boolean>(false);
+    const [lastUpdate, setLastUpdate] = useState<string>('');
 
     const db = getFirestore(app);
 
@@ -85,6 +92,89 @@ export default function OrderStatusScreen() {
         }
     };
 
+    // ADDED: Setup realtime listener for Firebase
+    const setupRealtimeListener = () => {
+        try {
+            console.log('🔥 Setting up realtime listener for ALL orders from Firebase...');
+
+            const ordersCollection = collection(db, 'orders');
+            const ordersQuery = query(
+                ordersCollection,
+                orderBy('timestamp', 'desc')
+            );
+
+            const unsubscribeListener = onSnapshot(ordersQuery,
+                (snapshot) => {
+                    console.log('🔄 Realtime update received from Firebase');
+
+                    const firebaseOrders: OrderData[] = [];
+
+                    snapshot.forEach((doc) => {
+                        const data = doc.data();
+                        console.log(`📊 Processing order:`, {
+                            orderId: data.orderId,
+                            status: data.status,
+                            customerName: data.customerName
+                        });
+
+                        const order: OrderData = {
+                            orderId: data.orderId || doc.id,
+                            customerName: data.customerName || 'Unknown Customer',
+                            items: data.items || [],
+                            subtotal: Number(data.subtotal) || 0,
+                            total: Number(data.total) || 0,
+                            timestamp: data.timestamp || data.created_at || new Date().toISOString(),
+                            status: data.status || 'unpaid',
+                            firebaseId: doc.id,
+                            orderType: data.order_type || data.orderType || 'dine-in',
+                            cupsUsed: data.cups_used || data.cupsUsed || 0,
+                            allItemsReady: data.allItemsReady || false
+                        };
+
+                        firebaseOrders.push(order);
+                    });
+
+                    // Check if there's data in Firebase
+                    const hasData = firebaseOrders.length > 0;
+                    setHasFirebaseData(hasData);
+
+                    // Filter only unpaid orders for order status screen
+                    const unpaidOrders = firebaseOrders.filter(order => order.status === 'unpaid');
+
+                    setOrders(unpaidOrders);
+                    setLastUpdate(new Date().toLocaleTimeString());
+                    console.log('✅ Realtime orders updated:', {
+                        totalOrders: firebaseOrders.length,
+                        unpaidOrders: unpaidOrders.length,
+                        hasFirebaseData: hasData
+                    });
+                },
+                (error) => {
+                    console.error('❌ Error in realtime listener:', error);
+                    // Fallback to regular loading if realtime fails
+                    loadOrders();
+                }
+            );
+
+            setUnsubscribe(() => unsubscribeListener);
+            console.log('✅ Realtime listener setup complete');
+
+        } catch (error) {
+            console.error('❌ Error setting up realtime listener:', error);
+            // Fallback to regular loading
+            loadOrders();
+        }
+    };
+
+    // ADDED: Cleanup realtime listener
+    const cleanupRealtimeListener = () => {
+        if (unsubscribe) {
+            console.log('🧹 Cleaning up realtime listener...');
+            unsubscribe();
+            setUnsubscribe(null);
+        }
+    };
+
     const loadOrders = async () => {
         setLoading(true);
         try {
@@ -94,18 +184,22 @@ export default function OrderStatusScreen() {
             let allOrders: OrderData[] = [];
 
             if (connectionMode === 'offline') {
+                // Load from local storage - ALL ORDERS but filter for UNPAID only
                 console.log('📱 Loading orders from local storage...');
                 const localOrders = await syncService.getPendingReceipts();
                 allOrders = localOrders.filter(order => order.status === 'unpaid');
                 console.log('📱 Local orders loaded:', allOrders.length);
-            } else {
-                try {
-                    console.log('🔥 Loading orders from Firebase...');
 
+                setHasFirebaseData(false); // Offline mode, no Firebase data
+
+            } else {
+                // Online mode - manual refresh as backup to real-time listener
+                console.log('🔥 Online mode - Manual refresh as backup...');
+
+                try {
                     const ordersCollection = collection(db, 'orders');
                     const ordersQuery = query(
                         ordersCollection,
-                        where('status', '==', 'unpaid'),
                         orderBy('timestamp', 'desc')
                     );
 
@@ -113,6 +207,12 @@ export default function OrderStatusScreen() {
 
                     const firebaseOrders: OrderData[] = ordersSnapshot.docs.map(doc => {
                         const data = doc.data();
+                        console.log('🔥 Loading order from Firebase:', {
+                            orderId: data.orderId,
+                            status: data.status,
+                            customerName: data.customerName
+                        });
+
                         return {
                             orderId: data.orderId || doc.id,
                             customerName: data.customerName || 'Unknown Customer',
@@ -128,35 +228,97 @@ export default function OrderStatusScreen() {
                         };
                     });
 
-                    allOrders = firebaseOrders;
-                    console.log('🔥 Firebase orders loaded:', allOrders.length, 'unpaid orders');
+                    // Check if there's data in Firebase
+                    setHasFirebaseData(firebaseOrders.length > 0);
+
+                    // Filter only unpaid orders for order status
+                    allOrders = firebaseOrders.filter(order => order.status === 'unpaid');
+
+                    console.log('🔥 Firebase orders loaded:', {
+                        totalOrders: firebaseOrders.length,
+                        unpaidOrders: allOrders.length,
+                        hasFirebaseData: firebaseOrders.length > 0
+                    });
+
+                    // Setup realtime listener after initial load
+                    setupRealtimeListener();
 
                 } catch (firebaseError) {
-                    console.log('⚠️ Failed to load from Firebase, falling back to local storage');
+                    console.log('⚠️ Failed to load from Firebase, falling back to local storage:', firebaseError);
                     const localOrders = await syncService.getPendingReceipts();
                     allOrders = localOrders.filter(order => order.status === 'unpaid');
+                    setHasFirebaseData(false);
                     console.log('📱 Fallback to local orders:', allOrders.length);
                 }
             }
 
             setOrders(allOrders);
+            setLastUpdate(new Date().toLocaleTimeString());
             console.log('✅ Final loaded orders:', allOrders.length);
 
         } catch (error) {
             console.error('❌ Error loading orders:', error);
-            const syncService = OfflineSyncService.getInstance();
-            const localOrders = await syncService.getPendingReceipts();
-            const filteredOrders = localOrders.filter(order => order.status === 'unpaid');
-            setOrders(filteredOrders);
-            console.log('📱 Emergency fallback to local orders:', filteredOrders.length);
+            // Final fallback - try to get from local storage
+            try {
+                const syncService = OfflineSyncService.getInstance();
+                const localOrders = await syncService.getPendingReceipts();
+                const filteredOrders = localOrders.filter(order => order.status === 'unpaid');
+                setOrders(filteredOrders);
+                setHasFirebaseData(false);
+                setLastUpdate(new Date().toLocaleTimeString());
+                console.log('📱 Emergency fallback to local orders:', filteredOrders.length);
+            } catch (fallbackError) {
+                console.error('❌ Emergency fallback failed:', fallbackError);
+                setOrders([]);
+                setHasFirebaseData(false);
+            }
         } finally {
             setLoading(false);
         }
     };
 
+    // Check if Firebase has data on component mount
+    const checkFirebaseData = async () => {
+        try {
+            const connectionMode = await getConnectionMode();
+
+            if (connectionMode === 'online') {
+                setCheckingFirebase(true);
+                const ordersCollection = collection(db, 'orders');
+                const snapshot = await getDocs(ordersCollection);
+                const hasData = !snapshot.empty;
+                setHasFirebaseData(hasData);
+                console.log('🔥 Firebase data check:', hasData ? 'Data exists' : 'No data');
+
+                if (hasData) {
+                    snapshot.forEach((doc) => {
+                        const data = doc.data();
+                        console.log('📊 Firebase order found:', {
+                            orderId: data.orderId,
+                            status: data.status,
+                            customerName: data.customerName
+                        });
+                    });
+                }
+            }
+        } catch (error) {
+            console.log('❌ Error checking Firebase data:', error);
+            setHasFirebaseData(false);
+        } finally {
+            setCheckingFirebase(false);
+        }
+    };
+
+    // UPDATE: useFocusEffect to include Firebase data check
     useFocusEffect(
         React.useCallback(() => {
             loadOrders();
+            checkFirebaseData();
+
+            // Cleanup when screen loses focus
+            return () => {
+                cleanupRealtimeListener();
+            };
         }, [])
     );
 
@@ -397,8 +559,6 @@ export default function OrderStatusScreen() {
                 }
             }
 
-
-
         } catch (error) {
             console.error('❌ Error cancelling item:', error);
             Alert.alert('Error', 'Failed to cancel item');
@@ -500,6 +660,8 @@ export default function OrderStatusScreen() {
 
     const updateOrderStatus = async (orderId: string, newStatus: 'paid' | 'cancelled') => {
         try {
+            setIsProcessing(true); // START PROCESSING - SHOW SPINNER
+
             const syncService = OfflineSyncService.getInstance();
             const connectionMode = await getConnectionMode();
 
@@ -550,6 +712,7 @@ export default function OrderStatusScreen() {
 
             setOrders(prev => prev.filter(order => order.orderId !== orderId));
 
+            // SUCCESS - Show alert after processing is complete
             Alert.alert('Success', `Order marked as ${finalStatus}`);
             setShowActionModal(false);
             setSelectedOrder(null);
@@ -557,6 +720,8 @@ export default function OrderStatusScreen() {
         } catch (error) {
             console.error('❌ Error updating order:', error);
             Alert.alert('Error', 'Failed to update order status');
+        } finally {
+            setIsProcessing(false); // STOP PROCESSING - HIDE SPINNER
         }
     };
 
@@ -624,7 +789,6 @@ export default function OrderStatusScreen() {
         return items.filter(item => !item.cancelled);
     };
 
-    // ADDED: Check if all active items are ready
     // ADDED: Check if all active items are ready (cancelled items are considered as "completed")
     const areAllItemsReady = (order: OrderData | null) => {
         if (!order) return false;
@@ -654,6 +818,7 @@ export default function OrderStatusScreen() {
                     {/* Header Container */}
                     <ThemedView style={styles.headerContainer}>
                         <ThemedView style={styles.headerSection}>
+                            {/* Sa header section, idugang ang Firebase status */}
                             <ThemedView style={styles.headerTop}>
                                 <ThemedText style={styles.mainTitle}>Order Status</ThemedText>
                                 <TouchableOpacity
@@ -663,9 +828,21 @@ export default function OrderStatusScreen() {
                                     <Feather name="refresh-cw" size={18} color="#874E3B" />
                                 </TouchableOpacity>
                             </ThemedView>
+
                             <ThemedText style={styles.modeInfo}>
-                                {isOnlineMode ? '🔥 Connected to Firebase - Showing online data' : '📱 Using local storage - Showing local data'}
+                                {isOnlineMode ? '🔥 Connected to Firebase - Realtime updates active' : '📱 Using local storage - Showing local data'}     {lastUpdate && (
+                                    <ThemedText style={styles.lastUpdateText}>
+                                        Last update: {lastUpdate}
+                                    </ThemedText>
+                                )}
                             </ThemedText>
+
+                            {/* Firebase Data Status */}
+
+
+                            {/* Last Update Time */}
+
+
 
                             {/* ORDER TYPE FILTERS */}
                             <ThemedView style={styles.orderTypeFilters}>
@@ -734,7 +911,8 @@ export default function OrderStatusScreen() {
                         >
                             {loading ? (
                                 <ThemedView style={styles.loadingContainer}>
-                                    <ThemedText>Loading orders...</ThemedText>
+                                    <ActivityIndicator size="large" color="#874E3B" />
+                                    <ThemedText style={{ marginTop: 10 }}>Loading orders...</ThemedText>
                                 </ThemedView>
                             ) : filteredOrders.length === 0 ? (
                                 <ThemedView style={styles.emptyContainer}>
@@ -1002,27 +1180,35 @@ export default function OrderStatusScreen() {
                                     </ThemedView>
 
                                     <ThemedView style={styles.actionButtons}>
-                                        {/* ADDED: Disabled state for DONE button when not all items are ready */}
+                                        {/* UPDATED: DONE button with spinner */}
                                         <TouchableOpacity
                                             style={[
                                                 styles.actionButtonModal,
                                                 styles.paidButton,
-                                                !areAllItemsReady(selectedOrder) && styles.disabledButton
+                                                (!areAllItemsReady(selectedOrder) || isProcessing) && styles.disabledButton
                                             ]}
-                                            onPress={() => selectedOrder && areAllItemsReady(selectedOrder) && updateOrderStatus(selectedOrder.orderId, 'paid')}
-                                            disabled={!areAllItemsReady(selectedOrder)}
+                                            onPress={() => selectedOrder && areAllItemsReady(selectedOrder) && !isProcessing && updateOrderStatus(selectedOrder.orderId, 'paid')}
+                                            disabled={!areAllItemsReady(selectedOrder) || isProcessing}
                                         >
-                                            <Feather
-                                                name="check-circle"
-                                                size={20}
-                                                color={areAllItemsReady(selectedOrder) ? "#FFFEEA" : "#9CA3AF"}
-                                            />
-                                            <ThemedText style={[
-                                                styles.actionButtonTextModal,
-                                                !areAllItemsReady(selectedOrder) && styles.disabledButtonText
-                                            ]}>
-                                                {areAllItemsReady(selectedOrder) ? 'DONE' : 'COMPLETE PREPARATION'}
-                                            </ThemedText>
+                                            {isProcessing ? (
+                                                // Show spinner when processing
+                                                <ActivityIndicator size="small" color="#FFFEEA" />
+                                            ) : (
+                                                // Show normal content when not processing
+                                                <>
+                                                    <Feather
+                                                        name="check-circle"
+                                                        size={20}
+                                                        color={areAllItemsReady(selectedOrder) ? "#FFFEEA" : "#9CA3AF"}
+                                                    />
+                                                    <ThemedText style={[
+                                                        styles.actionButtonTextModal,
+                                                        !areAllItemsReady(selectedOrder) && styles.disabledButtonText
+                                                    ]}>
+                                                        {areAllItemsReady(selectedOrder) ? 'DONE' : 'COMPLETE PREPARATION'}
+                                                    </ThemedText>
+                                                </>
+                                            )}
                                         </TouchableOpacity>
                                     </ThemedView>
                                 </ThemedView>
@@ -1418,6 +1604,45 @@ const styles = StyleSheet.create({
         fontSize: 20,
         fontWeight: 'bold',
         color: '#874E3B',
+    },
+    // Sa styles, idugang:
+    firebaseDataStatus: {
+        fontSize: 12,
+        fontWeight: '600',
+        marginTop: 4,
+        textAlign: 'center',
+    },
+    firebaseDataExists: {
+        color: '#16A34A',
+    },
+    firebaseDataEmpty: {
+        color: '#DC2626',
+    },
+    checkingFirebaseContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#FEF3C7',
+        padding: 8,
+        borderRadius: 6,
+        marginBottom: 8,
+        borderWidth: 1,
+        borderColor: '#D97706',
+    },
+    checkingFirebaseText: {
+        fontSize: 12,
+        color: '#92400E',
+        marginLeft: 8,
+        fontWeight: '500',
+    },
+    lastUpdateText: {
+        fontSize: 11,
+        color: '#8B7355',
+        fontStyle: 'italic',
+        marginBottom: 8,
+        textAlign: 'center',
+        fontWeight: 'bold',
+
     },
     actionButtons: {
         flexDirection: 'row',

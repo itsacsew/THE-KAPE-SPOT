@@ -930,7 +930,45 @@ export default function PosScreen() {
         return !!item.cupName && item.cupName.trim() !== '' && item.stocks > 0;
     };
 
-    // Function to print receipt using connected Bluetooth printer - SAME LOGIC AS SALES-EXPENSE
+    // Function to generate compact receipt content
+    const generateCompactReceiptContent = (receipt: ReceiptData): string => {
+        const currentDate = new Date().toLocaleDateString();
+        const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+        // Create compact receipt content
+        let receiptContent = `
+KAPE SPOT
+------------
+DATE: ${currentDate}
+TIME: ${currentTime}
+ORDER: ${receipt.orderId}
+CUSTOMER: ${receipt.customerName}
+TYPE: ${receipt.orderType === 'dine-in' ? 'DINE IN' : 'TAKE OUT'}
+------------
+`;
+
+        // Add items in compact format
+        receipt.items.forEach(item => {
+            const itemName = item.name.length > 16 ? item.name.substring(0, 16) + '...' : item.name;
+            receiptContent += `${itemName} x${item.quantity} ₱${(item.price * item.quantity).toFixed(2)}\n`;
+        });
+
+        receiptContent += `------------
+SUBTOTAL: ₱${receipt.subtotal.toFixed(2)}
+TOTAL: ₱${receipt.total.toFixed(2)}
+------------
+`;
+
+        if (receipt.orderType === 'take-out' && receipt.cupsUsed && receipt.cupsUsed > 0) {
+            receiptContent += `CUPS: ${receipt.cupsUsed}\n------------\n`;
+        }
+
+        receiptContent += `Thank you!`;
+
+        return receiptContent.trim();
+    };
+
+    // Function to print receipt using connected Bluetooth printer - UPDATED FOR LARGE RECEIPTS
     const handlePrintReceipt = async () => {
         console.log('🖨️ Starting print process...');
 
@@ -945,41 +983,14 @@ export default function PosScreen() {
         }
 
         try {
-            const currentDate = new Date().toLocaleDateString();
-            const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const receiptContent = generateCompactReceiptContent(currentReceipt);
+            console.log('📄 Compact receipt content generated, length:', receiptContent.length);
 
-            // Create receipt content with proper formatting
-            const receiptContent = `
-    KAPE SPOT
-    ------------
-    DATE: ${currentDate}
-    TIME: ${currentTime}
-    ORDER: ${currentReceipt.orderId}
-    CUSTOMER: ${currentReceipt.customerName}
-    TYPE: ${currentReceipt.orderType === 'dine-in' ? 'DINE IN' : 'TAKE OUT'}
-    ------------
-    ${currentReceipt.items.map(item =>
-                `${item.name.substring(0, 20)} x${item.quantity} ₱${(item.price * item.quantity).toFixed(2)}`
-            ).join('\n')}
-    ------------
-    SUBTOTAL: ₱${currentReceipt.subtotal.toFixed(2)}
-    TOTAL: ₱${currentReceipt.total.toFixed(2)}
-    ------------
-    ${currentReceipt.orderType === 'take-out' && currentReceipt.cupsUsed && currentReceipt.cupsUsed > 0 ?
-                    `CUPS: ${currentReceipt.cupsUsed}\n------------\n` : ''}
-    Thank you!
-            `.trim();
-
-            console.log('📄 Receipt content:', receiptContent);
-            console.log('🔗 Bluetooth connection:', bluetoothConnection);
-
-            // Send to Bluetooth printer
             await sendToBluetoothPrinter(receiptContent);
 
         } catch (error) {
             console.error('❌ Error printing receipt:', error);
 
-            // FIXED: Proper error type checking
             if (error instanceof Error && error.message.includes('second copy')) {
                 Alert.alert('Print Partially Complete', 'First copy printed successfully!');
                 resetAfterOrder();
@@ -989,7 +1000,7 @@ export default function PosScreen() {
         }
     };
 
-    // Function to send data to Bluetooth printer - SAME LOGIC AS SALES-EXPENSE
+    // Function to send data to Bluetooth printer - UPDATED WITH CHUNKING FOR LARGE RECEIPTS
     const sendToBluetoothPrinter = async (data: string) => {
         try {
             if (!bluetoothConnection) {
@@ -1032,42 +1043,93 @@ export default function PosScreen() {
             const lineFeed = [0x0A]; // Line feed
             const paperCut = [0x1D, 0x56, 0x41, 0x10]; // Paper cut
 
-            // Convert data to bytes
-            const textBytes = Array.from(new TextEncoder().encode(data));
+            // Split data into chunks to avoid buffer overflow
+            const chunkSize = 100; // Adjust based on your printer's capacity
+            const dataChunks = [];
 
-            // Build complete print data
-            const printData = [
+            for (let i = 0; i < data.length; i += chunkSize) {
+                dataChunks.push(data.substring(i, i + chunkSize));
+            }
+
+            console.log(`📄 Data split into ${dataChunks.length} chunks`);
+
+            // Convert text to bytes
+            const convertToBytes = (text: string): number[] => {
+                return Array.from(new TextEncoder().encode(text));
+            };
+
+            // Build print data in chunks
+            const printChunks = [];
+
+            // First chunk: Initialize printer and header
+            printChunks.push([
                 ...initializePrinter,
                 ...centerAlign,
-                ...textBytes,
+                ...convertToBytes(dataChunks[0]),
+                ...lineFeed
+            ]);
+
+            // Middle chunks: Continue with left alignment
+            for (let i = 1; i < dataChunks.length - 1; i++) {
+                printChunks.push([
+                    ...leftAlign,
+                    ...convertToBytes(dataChunks[i]),
+                    ...lineFeed
+                ]);
+            }
+
+            // Last chunk: Final content and paper cut
+            printChunks.push([
+                ...leftAlign,
+                ...convertToBytes(dataChunks[dataChunks.length - 1]),
                 ...lineFeed, ...lineFeed, ...lineFeed,
                 ...paperCut
-            ];
+            ]);
 
-            console.log('🖨️ Sending print data, length:', printData.length);
+            console.log(`🖨️ Sending ${printChunks.length} print chunks`);
 
-            // Send to printer - FIRST COPY
-            await BleManager.write(
-                peripheralId,
-                serviceId,
-                transfer,
-                printData,
-                printData.length
-            );
+            // Send chunks with delays between them - FIRST COPY
+            for (let i = 0; i < printChunks.length; i++) {
+                const chunk = printChunks[i];
+                console.log(`📦 Sending chunk ${i + 1}/${printChunks.length}, size: ${chunk.length} bytes`);
+
+                await BleManager.write(
+                    peripheralId,
+                    serviceId,
+                    transfer,
+                    chunk,
+                    chunk.length
+                );
+
+                // Add delay between chunks to prevent buffer overflow
+                if (i < printChunks.length - 1) {
+                    await new Promise(resolve => setTimeout(resolve, 100)); // 100ms delay
+                }
+            }
 
             console.log('✅ First copy printed successfully');
             Alert.alert('Print Success', 'First copy printed! Printing second copy...');
 
             // Wait a bit then print SECOND COPY
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            await new Promise(resolve => setTimeout(resolve, 1500));
 
-            await BleManager.write(
-                peripheralId,
-                serviceId,
-                transfer,
-                printData,
-                printData.length
-            );
+            // Repeat for second copy
+            for (let i = 0; i < printChunks.length; i++) {
+                const chunk = printChunks[i];
+
+                await BleManager.write(
+                    peripheralId,
+                    serviceId,
+                    transfer,
+                    chunk,
+                    chunk.length
+                );
+
+                // Add delay between chunks
+                if (i < printChunks.length - 1) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+            }
 
             console.log('✅ Second copy printed successfully');
             Alert.alert('Printing Complete', 'Two copies printed successfully!');
@@ -1078,7 +1140,6 @@ export default function PosScreen() {
 
             let errorMessage = 'Failed to connect to printer. ';
 
-            // FIXED: Proper error type checking
             if (error instanceof Error) {
                 const errorString = error.message;
                 console.log('🔍 Error details:', errorString);
@@ -1089,6 +1150,8 @@ export default function PosScreen() {
                     errorMessage += 'Printer service not found.';
                 } else if (errorString.includes('Write not permitted')) {
                     errorMessage += 'No permission to write to printer.';
+                } else if (errorString.includes('buffer') || errorString.includes('overflow')) {
+                    errorMessage += 'Receipt too large. Try with fewer items or contact support.';
                 } else {
                     errorMessage += `Error: ${errorString}`;
                 }
@@ -1600,8 +1663,8 @@ export default function PosScreen() {
                             <ThemedText style={styles.separatorText}>-----------------------</ThemedText>
                         </ThemedView>
 
-                        {/* ORDER ITEMS */}
-                        <ThemedView style={styles.receiptItems}>
+                        {/* ORDER ITEMS - SCROLLABLE */}
+                        <ScrollView style={styles.receiptItemsScroll}>
                             <ThemedView style={styles.receiptItemHeader}>
                                 <Text style={[styles.itemHeaderText, styles.itemNameHeader]}>Item</Text>
                                 <Text style={[styles.itemHeaderText, styles.itemQtyHeader]}>Qty</Text>
@@ -1621,7 +1684,7 @@ export default function PosScreen() {
                                     </Text>
                                 </ThemedView>
                             ))}
-                        </ThemedView>
+                        </ScrollView>
 
                         <ThemedView style={styles.receiptSeparator}>
                             <ThemedText style={styles.separatorText}>-----------------------</ThemedText>
@@ -1683,7 +1746,6 @@ export default function PosScreen() {
         </ThemedView>
     );
 }
-
 
 // ... (styles remain the same as previous version)
 const styles = StyleSheet.create({
@@ -1790,7 +1852,7 @@ const styles = StyleSheet.create({
         zIndex: 1000,
     },
     receiptModal: {
-        width: 250, // Approximately 2 inches on most devices
+        width: 250,
         backgroundColor: '#FFFFFF',
         borderRadius: 4,
         padding: 12,
@@ -1799,7 +1861,7 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.25,
         shadowRadius: 4,
         elevation: 5,
-        maxHeight: '80%',
+        maxHeight: '90%', // Changed from 80% to 90% to give more space
     },
     receiptHeader: {
         alignItems: 'center',
@@ -2471,6 +2533,10 @@ const styles = StyleSheet.create({
         color: '#FFFEEA',
         fontSize: 12,
         fontWeight: 'bold',
+    },
+    receiptItemsScroll: {
+        maxHeight: 200, // Adjust this value based on how much space you want for items
+        marginBottom: 6,
     },
     cancelCupButton: {
         backgroundColor: '#E8D8C8',

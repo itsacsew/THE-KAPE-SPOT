@@ -30,15 +30,15 @@ export default function RootLayout() {
   useEffect(() => {
     async function initializeApp() {
       try {
-        // Lock to landscape orientation
+        // Lock to PORTRAIT orientation (changed from LANDSCAPE)
         await ScreenOrientation.lockAsync(
-          ScreenOrientation.OrientationLock.LANDSCAPE
+          ScreenOrientation.OrientationLock.PORTRAIT
         );
 
-        // Hide Android navigation bar
-        (NavigationBar as any).setVisibilityAsync('hidden');
+        // Hide Android navigation bar (optional - you can keep or remove this)
+        await NavigationBar.setVisibilityAsync('hidden');
 
-        // Hide status bar (top)
+        // Hide status bar (top) - optional
         StatusBar.setHidden(true);
 
         if (loaded) {

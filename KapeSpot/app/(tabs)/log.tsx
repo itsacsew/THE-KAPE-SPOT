@@ -65,8 +65,8 @@ interface BluetoothConnection {
 }
 
 const { width } = Dimensions.get('window');
-const CARD_MARGIN = 3.7;
-const CARD_WIDTH = (width - (CARD_MARGIN * 20)) / 4; // 4 columns with margins
+const CARD_MARGIN = 8;
+const CARD_WIDTH = (width - (CARD_MARGIN * 10)) / 2; // 2 columns with margins
 
 export default function LogScreen() {
     const [orders, setOrders] = useState<OrderData[]>([]);
@@ -89,7 +89,6 @@ export default function LogScreen() {
     const db = getFirestore(app);
 
     // IMPROVED: Real-time Firebase listener for ALL orders (unpaid, paid, cancelled)
-    // Sa real-time listener
     useEffect(() => {
         const setupRealTimeListener = async () => {
             try {
@@ -142,7 +141,7 @@ export default function LogScreen() {
 
                             console.log('✅ Processed orders count:', firebaseOrders.length);
 
-                            // FIXED: Sort by timestamp with proper undefined handling
+                            // Sort by timestamp with proper undefined handling
                             firebaseOrders.sort((a, b) => {
                                 const timeA = a.updated_at || a.timestamp || a.created_at || new Date().toISOString();
                                 const timeB = b.updated_at || b.timestamp || b.created_at || new Date().toISOString();
@@ -183,7 +182,6 @@ export default function LogScreen() {
 
         setupRealTimeListener();
     }, []);
-
 
     // Check Bluetooth connection status
     useEffect(() => {
@@ -237,7 +235,7 @@ export default function LogScreen() {
         return (index + 1).toString().padStart(2, '0');
     };
 
-    // IMPROVED: Load orders with better error handling - NOW INCLUDES ALL STATUSES
+    // Load orders with better error handling
     const loadOrders = async () => {
         console.log('🚀 Starting loadOrders...');
         setLoading(true);
@@ -252,10 +250,10 @@ export default function LogScreen() {
                 // Load from local storage - ALL ORDERS (unpaid, paid, cancelled)
                 console.log('📱 Loading ALL orders from local storage...');
                 const localOrders = await syncService.getPendingReceipts();
-                allOrders = localOrders; // Include all statuses
+                allOrders = localOrders;
                 console.log('📱 Local orders loaded:', allOrders.length);
 
-                // FIXED: Sort by timestamp using only common fields
+                // Sort by timestamp
                 allOrders.sort((a, b) => {
                     const timeA = a.timestamp || new Date().toISOString();
                     const timeB = b.timestamp || new Date().toISOString();
@@ -304,7 +302,7 @@ export default function LogScreen() {
                     // Check if there's data in Firebase
                     setHasFirebaseData(firebaseOrders.length > 0);
 
-                    // FIXED: Sort by timestamp using only common fields
+                    // Sort by timestamp
                     allOrders.sort((a, b) => {
                         const timeA = a.timestamp || new Date().toISOString();
                         const timeB = b.timestamp || new Date().toISOString();
@@ -320,9 +318,9 @@ export default function LogScreen() {
 
                     // Fallback to local storage
                     const localOrders = await syncService.getPendingReceipts();
-                    allOrders = localOrders; // Include all statuses
+                    allOrders = localOrders;
 
-                    // FIXED: Sort by timestamp using only common fields
+                    // Sort by timestamp
                     allOrders.sort((a, b) => {
                         const timeA = a.timestamp || new Date().toISOString();
                         const timeB = b.timestamp || new Date().toISOString();
@@ -337,13 +335,13 @@ export default function LogScreen() {
 
         } catch (error) {
             console.error('❌ Error loading orders:', error);
-            // Final fallback - try to get from local storage - ALL ORDERS
+            // Final fallback - try to get from local storage
             try {
                 const syncService = OfflineSyncService.getInstance();
                 const localOrders = await syncService.getPendingReceipts();
-                const filteredOrders = localOrders; // Include all statuses
+                const filteredOrders = localOrders;
 
-                // FIXED: Sort by timestamp using only common fields
+                // Sort by timestamp
                 filteredOrders.sort((a, b) => {
                     const timeA = a.timestamp || new Date().toISOString();
                     const timeB = b.timestamp || new Date().toISOString();
@@ -355,13 +353,13 @@ export default function LogScreen() {
                 console.log('📱 Emergency fallback to local orders:', filteredOrders.length);
             } catch (fallbackError) {
                 console.error('❌ Emergency fallback failed:', fallbackError);
-                setOrders([]); // Set empty array as final fallback
+                setOrders([]);
             }
         } finally {
             setLoading(false);
         }
     };
-    // Check if Firebase has data on component mount
+
     // Check if Firebase has data on component mount
     const checkFirebaseData = async () => {
         try {
@@ -417,7 +415,7 @@ export default function LogScreen() {
             checkFirebaseData();
         }, [])
     );
-    // Rest of the functions remain the same but updated to handle all statuses
+
     const deleteAllOrders = async () => {
         Alert.alert(
             'Delete All Orders',
@@ -536,22 +534,6 @@ export default function LogScreen() {
         setAllItems([]);
     };
 
-    // Print functions remain the same...
-    const sendToBluetoothPrinter = async (data: Uint8Array) => {
-        // ... existing print implementation
-    };
-
-    const printItemsList = async () => {
-        // ... existing print implementation
-    };
-
-    useFocusEffect(
-        React.useCallback(() => {
-            loadOrders();
-            checkFirebaseData();
-        }, [])
-    );
-
     const getFilteredOrders = () => {
         if (filter === 'all') {
             return orders;
@@ -612,7 +594,139 @@ export default function LogScreen() {
         return items.filter(item => !item.cancelled).length;
     };
 
-    // Render UI with updated filter buttons
+    // Render orders in 2-column grid - similar to POS menu items
+    const renderOrdersGrid = () => {
+        if (loading) {
+            return (
+                <ThemedView style={styles.loadingContainer}>
+                    <ThemedText style={styles.loadingContainers}>Loading orders</ThemedText>
+                </ThemedView>
+            );
+        }
+
+        const filteredOrders = getFilteredOrders();
+
+        if (filteredOrders.length === 0) {
+            return (
+                <ThemedView style={styles.emptyContainer}>
+                    <Feather name="archive" size={48} color="#854442" />
+                    <ThemedText style={styles.emptyText}>No orders found</ThemedText>
+                    <ThemedText style={styles.emptySubtext}>
+                        {filter === 'all'
+                            ? 'No orders yet'
+                            : `No ${filter} orders found`}
+                    </ThemedText>
+                </ThemedView>
+            );
+        }
+
+        // Create rows with 2 orders per row (like POS menu items)
+        const rows = [];
+        for (let i = 0; i < filteredOrders.length; i += 2) {
+            const rowOrders = filteredOrders.slice(i, i + 2);
+            rows.push(
+                <ThemedView key={`row-${i}`} style={styles.ordersRow}>
+                    {rowOrders.map((order, orderIndex) => (
+                        <TouchableOpacity
+                            key={`${order.orderId}-${orderIndex}`}
+                            style={styles.orderCard}
+                            onPress={() => openOrderModal(order)}
+                        >
+                            {/* Order Header */}
+                            <ThemedView style={styles.orderHeader}>
+                                <ThemedText style={styles.orderId}>
+                                    #{getOrderNumberIndicator(filteredOrders, order.orderId)}
+                                </ThemedText>
+                                <ThemedView style={[styles.statusBadge, { backgroundColor: getStatusColor(order.status) }]}>
+                                    <Feather name={getStatusIcon(order.status)} size={10} color="#FFFEEA" />
+                                    <ThemedText style={styles.statusText}>
+                                        {order.status.toUpperCase()}
+                                    </ThemedText>
+                                </ThemedView>
+                            </ThemedView>
+
+                            {/* Customer Name */}
+                            <ThemedText style={styles.customerName} numberOfLines={1}>
+                                {order.customerName}
+                            </ThemedText>
+
+                            {/* Order Type Indicator */}
+                            {order.order_type && (
+                                <ThemedView style={styles.orderTypeTag}>
+                                    <Feather 
+                                        name={order.order_type === 'dine-in' ? "coffee" : "shopping-bag"} 
+                                        size={8} 
+                                        color="#FFFEEA" 
+                                    />
+                                    <ThemedText style={styles.orderTypeTagText}>
+                                        {order.order_type === 'dine-in' ? 'DINE IN' : 'TAKE OUT'}
+                                    </ThemedText>
+                                </ThemedView>
+                            )}
+
+                            {/* Order Date & Time */}
+                            
+
+                            {/* Items Summary */}
+                            <ThemedView style={styles.itemDisplay}>
+                                <ThemedText style={styles.mainItem} numberOfLines={2}>
+                                    {getFirstItemName(order.items)}
+                                </ThemedText>
+                                {getActiveItemsCount(order.items) > 1 && (
+                                    <ThemedText style={styles.additionalItems}>
+                                        +{getActiveItemsCount(order.items) - 1} more items
+                                    </ThemedText>
+                                )}
+                                {getActiveItemsCount(order.items) === 0 && (
+                                    <ThemedText style={styles.cancelledText}>
+                                        All items cancelled
+                                    </ThemedText>
+                                )}
+                                <ThemedText style={styles.totalItems}>
+                                    {getActiveItemsCount(order.items)} active items
+                                </ThemedText>
+                            </ThemedView>
+
+                            {/* Order Total */}
+                            <ThemedView style={styles.totalSection}>
+                                <ThemedText style={styles.totalLabel}>Total:</ThemedText>
+                                <ThemedText style={styles.orderTotal}>
+                                    ₱{order.total.toFixed(2)}
+                                </ThemedText>
+                            </ThemedView>
+
+                            {/* Cups Used (for take-out orders) */}
+                            {order.order_type === 'take-out' && order.cups_used && order.cups_used > 0 && (
+                                <ThemedView style={styles.cupsTag}>
+                                    <Feather name="coffee" size={8} color="#874E3B" />
+                                    <ThemedText style={styles.cupsTagText}>
+                                        Cups: {order.cups_used}
+                                    </ThemedText>
+                                </ThemedView>
+                            )}
+
+                            {/* View Button */}
+                            <TouchableOpacity
+                                style={styles.viewButton}
+                                onPress={() => openOrderModal(order)}
+                            >
+                                <ThemedText style={styles.viewButtonText}>
+                                    VIEW DETAILS
+                                </ThemedText>
+                            </TouchableOpacity>
+                        </TouchableOpacity>
+                    ))}
+                    {/* Fill empty slot if only 1 order in row */}
+                    {rowOrders.length < 2 && (
+                        <ThemedView style={styles.emptyCard} />
+                    )}
+                </ThemedView>
+            );
+        }
+
+        return rows;
+    };
+
     return (
         <ThemedView style={styles.container}>
             <Navbar activeNav="log" />
@@ -633,53 +747,26 @@ export default function LogScreen() {
                                         style={styles.reloadButton}
                                         onPress={loadOrders}
                                     >
-                                        <Feather name="refresh-cw" size={18} color="#874E3B" />
+                                        <Feather name="refresh-cw" size={18} color="#F5E6D3" />
                                     </TouchableOpacity>
                                     <TouchableOpacity
                                         style={styles.itemsButton}
                                         onPress={showAllItems}
                                         disabled={loading || orders.length === 0}
                                     >
-                                        <Feather name="list" size={18} color="#2563EB" />
+                                        <Feather name="list" size={18} color="#F5E6D3" />
                                     </TouchableOpacity>
                                     <TouchableOpacity
                                         style={styles.deleteButton}
                                         onPress={deleteAllOrders}
                                         disabled={loading}
                                     >
-                                        <Feather name="trash-2" size={18} color="#DC2626" />
+                                        <Feather name="trash-2" size={18} color="#F5E6D3" />
                                     </TouchableOpacity>
                                 </ThemedView>
                             </ThemedView>
 
-                            <ThemedText style={styles.modeInfo}>
-                                {isOnlineMode ? '🔥 Connected to Firebase - Real-time updates active' : '📱 Using local storage - Showing local data'}      {lastUpdate && (
-                                    <ThemedText style={styles.lastUpdateText}>
-                                        Last update: {lastUpdate}
-                                    </ThemedText>
-                                )}
-                            </ThemedText>
-
-
-                            {/* Last Update Time */}
-
-
-                            {/* Bluetooth Connection Status */}
-                            {isBluetoothConnected ? (
-                                <ThemedView style={styles.bluetoothStatus}>
-                                    <Feather name="bluetooth" size={14} color="#007AFF" />
-                                    <ThemedText style={styles.bluetoothStatusText}>
-                                        Connected to {bluetoothDeviceName}
-                                    </ThemedText>
-                                </ThemedView>
-                            ) : (
-                                <ThemedView style={styles.bluetoothStatusOffline}>
-                                    <Feather name="bluetooth" size={14} color="#DC2626" />
-                                    <ThemedText style={styles.bluetoothStatusTextOffline}>
-                                        Bluetooth printer not connected
-                                    </ThemedText>
-                                </ThemedView>
-                            )}
+                            
 
                             {/* Filter Buttons - ALL STATUSES */}
                             <ThemedView style={styles.filterContainer}>
@@ -747,101 +834,17 @@ export default function LogScreen() {
                                     </Text>
                                 </TouchableOpacity>
                             </ThemedView>
-
                         </ThemedView>
                     </ThemedView>
 
-                    {/* Orders Grid Container */}
+                    {/* Orders Grid Container - 2 COLUMN LAYOUT */}
                     <ThemedView style={styles.ordersContainer}>
                         <ScrollView
                             style={styles.scrollView}
                             contentContainerStyle={styles.ordersGrid}
                             showsVerticalScrollIndicator={false}
                         >
-                            {loading ? (
-                                <ThemedView style={styles.loadingContainer}>
-                                    <ThemedText>Loading orders...</ThemedText>
-                                </ThemedView>
-                            ) : getFilteredOrders().length === 0 ? (
-                                <ThemedView style={styles.emptyContainer}>
-                                    <Feather name="archive" size={48} color="#D4A574" />
-                                    <ThemedText style={styles.emptyText}>No orders found</ThemedText>
-                                    <ThemedText style={styles.emptySubtext}>
-                                        {filter === 'all'
-                                            ? 'No orders yet'
-                                            : `No ${filter} orders found`}
-                                    </ThemedText>
-                                </ThemedView>
-                            ) : (
-                                getFilteredOrders().map((order) => (
-                                    <TouchableOpacity
-                                        key={order.orderId}
-                                        style={styles.orderCard}
-                                        onPress={() => openOrderModal(order)}
-                                    >
-                                        {/* Order Header */}
-                                        <ThemedView style={styles.orderHeader}>
-                                            <ThemedText style={styles.orderId}>
-                                                #{getOrderNumberIndicator(getFilteredOrders(), order.orderId)}
-                                            </ThemedText>
-                                            <ThemedView style={[styles.statusBadge, { backgroundColor: getStatusColor(order.status) }]}>
-                                                <Feather name={getStatusIcon(order.status)} size={10} color="#FFFEEA" />
-                                                <ThemedText style={styles.statusText}>
-                                                    {order.status.toUpperCase()}
-                                                </ThemedText>
-                                            </ThemedView>
-                                        </ThemedView>
-
-                                        {/* Customer Name */}
-                                        <ThemedText style={styles.customerName} numberOfLines={1}>
-                                            {order.customerName}
-                                        </ThemedText>
-
-                                        {/* Order Date & Time */}
-                                        <ThemedText style={styles.orderDate}>
-                                            {formatDateTime(order.timestamp)}
-                                        </ThemedText>
-
-                                        {/* Items Summary */}
-                                        <ThemedView style={styles.itemDisplay}>
-                                            <ThemedText style={styles.mainItem} numberOfLines={2}>
-                                                {getFirstItemName(order.items)}
-                                            </ThemedText>
-                                            {getActiveItemsCount(order.items) > 1 && (
-                                                <ThemedText style={styles.additionalItems}>
-                                                    +{getActiveItemsCount(order.items) - 1} more items
-                                                </ThemedText>
-                                            )}
-                                            {getActiveItemsCount(order.items) === 0 && (
-                                                <ThemedText style={styles.cancelledText}>
-                                                    All items cancelled
-                                                </ThemedText>
-                                            )}
-                                            <ThemedText style={styles.totalItems}>
-                                                {getActiveItemsCount(order.items)} active items
-                                            </ThemedText>
-                                        </ThemedView>
-
-                                        {/* Order Total */}
-                                        <ThemedView style={styles.totalSection}>
-                                            <ThemedText style={styles.totalLabel}>Total:</ThemedText>
-                                            <ThemedText style={styles.orderTotal}>
-                                                ₱{order.total.toFixed(2)}
-                                            </ThemedText>
-                                        </ThemedView>
-
-                                        {/* View Button */}
-                                        <TouchableOpacity
-                                            style={styles.viewButton}
-                                            onPress={() => openOrderModal(order)}
-                                        >
-                                            <ThemedText style={styles.viewButtonText}>
-                                                VIEW DETAILS
-                                            </ThemedText>
-                                        </TouchableOpacity>
-                                    </TouchableOpacity>
-                                ))
-                            )}
+                            {renderOrdersGrid()}
                         </ScrollView>
                     </ThemedView>
 
@@ -851,6 +854,7 @@ export default function LogScreen() {
                         animationType="slide"
                         transparent={true}
                         onRequestClose={closeOrderModal}
+                        statusBarTranslucent={true}
                     >
                         <ThemedView style={styles.modalOverlay}>
                             <ThemedView style={styles.orderModal}>
@@ -890,6 +894,34 @@ export default function LogScreen() {
                                             {selectedOrder ? formatDateTime(selectedOrder.timestamp) : ''}
                                         </ThemedText>
                                     </ThemedView>
+
+                                    {/* Order Type in Modal */}
+                                    {selectedOrder?.order_type && (
+                                        <ThemedView style={styles.orderTypeSection}>
+                                            <ThemedText style={styles.orderTypeLabel}>Order Type:</ThemedText>
+                                            <ThemedView style={[
+                                                styles.orderTypeBadgeModal,
+                                                selectedOrder.order_type === 'dine-in' ? styles.dineInBadge : styles.takeOutBadge
+                                            ]}>
+                                                <Feather
+                                                    name={selectedOrder.order_type === 'dine-in' ? "coffee" : "shopping-bag"}
+                                                    size={12}
+                                                    color="#FFFEEA"
+                                                />
+                                                <ThemedText style={styles.orderTypeBadgeText}>
+                                                    {selectedOrder.order_type === 'dine-in' ? 'DINE IN' : 'TAKE OUT'}
+                                                </ThemedText>
+                                            </ThemedView>
+                                        </ThemedView>
+                                    )}
+
+                                    {/* Cups Used in Modal */}
+                                    {selectedOrder?.order_type === 'take-out' && selectedOrder?.cups_used && selectedOrder.cups_used > 0 && (
+                                        <ThemedView style={styles.cupsSection}>
+                                            <ThemedText style={styles.cupsLabel}>Cups Used:</ThemedText>
+                                            <ThemedText style={styles.cupsValue}>{selectedOrder.cups_used}</ThemedText>
+                                        </ThemedView>
+                                    )}
 
                                     <ThemedView style={styles.itemsSection}>
                                         <ThemedText style={styles.itemsLabel}>Order Items:</ThemedText>
@@ -958,6 +990,7 @@ export default function LogScreen() {
                         animationType="slide"
                         transparent={true}
                         onRequestClose={closeItemsModal}
+                        statusBarTranslucent={true}
                     >
                         <ThemedView style={styles.modalOverlay}>
                             <ThemedView style={styles.itemsModal}>
@@ -967,12 +1000,12 @@ export default function LogScreen() {
                                             All Order Items
                                         </ThemedText>
                                         <ThemedText style={styles.itemsCount}>
-                                            {allItems.length} active items total (cancelled items excluded)
+                                            {allItems.length} active items total
                                         </ThemedText>
                                     </ThemedView>
                                     <ThemedView style={styles.modalHeaderRight}>
                                         <TouchableOpacity onPress={closeItemsModal} style={styles.closeButton}>
-                                            <Feather name="x" size={24} color="#874E3B" />
+                                            <Feather name="x" size={24} color="#854442" />
                                         </TouchableOpacity>
                                     </ThemedView>
                                 </ThemedView>
@@ -1017,7 +1050,7 @@ export default function LogScreen() {
         </ThemedView>
     );
 }
-// Styles remain the same...
+
 const styles = StyleSheet.create({
     container: {
         flex: 1,
@@ -1033,42 +1066,31 @@ const styles = StyleSheet.create({
     },
     headerContainer: {
         marginBottom: 16,
-        backgroundColor: '#fffecaF2'
+        backgroundColor: 'transparent'
     },
     headerSection: {
-        backgroundColor: "#fffecaF2",
+        backgroundColor: "rgba(223, 204, 175, 0.7)",
         borderRadius: 12,
         padding: 5,
         borderWidth: 1,
-        borderColor: '#D4A574',
-    },
-    firebaseDataStatus: {
-        fontSize: 12,
-        color: '#16A34A',
-        fontWeight: '600',
-        marginTop: 4,
+        borderColor: '#854442',
     },
     headerTop: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
-        backgroundColor: '#fffecaF2'
+        backgroundColor: 'transparent'
     },
     headerButtons: {
         flexDirection: 'row',
         gap: 8,
+        backgroundColor: 'transparent'
     },
     mainTitle: {
         fontSize: 28,
-        color: '#874E3B',
+        color: '#854442',
         fontFamily: 'LobsterTwoItalic',
         lineHeight: 50
-    },
-    modeInfo: {
-        fontSize: 12,
-        color: '#874E3B',
-        fontStyle: 'italic',
-        marginTop: 4,
     },
     lastUpdateText: {
         fontSize: 11,
@@ -1077,43 +1099,11 @@ const styles = StyleSheet.create({
         marginTop: 2,
         fontWeight: 'bold'
     },
-    bluetoothStatus: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: '#E3F2FD',
-        padding: 8,
-        borderRadius: 6,
-        marginBottom: 12,
-        borderWidth: 1,
-        borderColor: '#007AFF',
-    },
-    bluetoothStatusOffline: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: '#FEF2F2',
-        padding: 8,
-        borderRadius: 6,
-        marginBottom: 12,
-        borderWidth: 1,
-        borderColor: '#DC2626',
-    },
-    bluetoothStatusText: {
-        fontSize: 12,
-        color: '#007AFF',
-        marginLeft: 8,
-        fontWeight: '500',
-    },
-    bluetoothStatusTextOffline: {
-        fontSize: 12,
-        color: '#DC2626',
-        marginLeft: 8,
-        fontWeight: '500',
-    },
     filterContainer: {
         flexDirection: 'row',
         marginTop: 12,
-        gap: 8,
-        backgroundColor: '#fffecaF2'
+        gap: 4,
+        backgroundColor: 'transparent'
     },
     filterButton: {
         flex: 1,
@@ -1122,15 +1112,15 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         gap: 6,
         paddingVertical: 8,
-        paddingHorizontal: 12,
-        borderRadius: 8,
+        paddingHorizontal: 10,
+        borderRadius: 10,
         backgroundColor: '#F5E6D3',
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
     },
     filterButtonActive: {
-        backgroundColor: '#874E3B',
-        borderColor: '#874E3B',
+        backgroundColor: '#854442',
+        borderColor: '#854442',
     },
     filterButtonText: {
         fontSize: 12,
@@ -1144,57 +1134,59 @@ const styles = StyleSheet.create({
         width: 40,
         height: 40,
         borderRadius: 8,
-        backgroundColor: '#F5E6D3',
+        backgroundColor: '#854442',
         justifyContent: 'center',
         alignItems: 'center',
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#F5E6D3',
     },
     itemsButton: {
         width: 40,
         height: 40,
         borderRadius: 8,
-        backgroundColor: '#DBEAFE',
+        backgroundColor: '#854442',
         justifyContent: 'center',
         alignItems: 'center',
         borderWidth: 1,
-        borderColor: '#BFDBFE',
+        borderColor: '#F5E6D3',
     },
     deleteButton: {
         width: 40,
         height: 40,
         borderRadius: 8,
-        backgroundColor: '#FEE2E2',
+        backgroundColor: '#854442',
         justifyContent: 'center',
         alignItems: 'center',
         borderWidth: 1,
-        borderColor: '#FECACA',
+        borderColor: '#F5E6D3',
     },
     ordersContainer: {
         flex: 1,
-        backgroundColor: "#fffecaF2",
+        backgroundColor: "rgba(223, 204, 175, 0.7)",
         borderRadius: 12,
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
         padding: 12,
     },
     scrollView: {
         flex: 1,
     },
     ordersGrid: {
+        flexDirection: 'column',
+    },
+    ordersRow: {
         flexDirection: 'row',
-        flexWrap: 'wrap',
-        justifyContent: 'flex-start',
+        justifyContent: 'space-between',
+        marginBottom: 12,
+        backgroundColor: 'transparent',
     },
     orderCard: {
         width: CARD_WIDTH,
-        height: CARD_WIDTH,
         backgroundColor: "#FFFEEA",
         borderRadius: 12,
         padding: 10,
         borderWidth: 2,
-        borderColor: '#D4A574',
-        margin: CARD_MARGIN / 2,
+        borderColor: '#F5E6D3',
         shadowColor: '#000',
         shadowOffset: {
             width: 0,
@@ -1203,20 +1195,24 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.1,
         shadowRadius: 3.84,
         elevation: 5,
-        justifyContent: 'space-between',
+    },
+    emptyCard: {
+        width: CARD_WIDTH,
+        backgroundColor: 'transparent',
     },
     orderHeader: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'flex-start',
         marginBottom: 6,
+        backgroundColor: 'transparent'
     },
     orderId: {
-        fontSize: 12,
+        fontSize: 15,
         fontWeight: 'bold',
-        color: '#874E3B',
+        color: '#854442',
         fontFamily: 'LobsterTwoRegular',
-        flex: 1,
+        flex: 1,       
     },
     statusBadge: {
         flexDirection: 'row',
@@ -1233,24 +1229,43 @@ const styles = StyleSheet.create({
         fontWeight: 'bold',
     },
     customerName: {
-        fontSize: 10,
-        fontWeight: '600',
-        color: '#5A3921',
-        marginBottom: 2,
+        fontSize: 15,
+        fontWeight: '700',
+        color: '#854442',
+        marginBottom: 4,
+    },
+    orderTypeTag: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#874E3B',
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+        borderRadius: 4,
+        alignSelf: 'flex-start',
+        marginBottom: 4,
+        gap: 4,
+    },
+    orderTypeTagText: {
+        color: '#FFFEEA',
+        fontSize: 8,
+        fontWeight: 'bold',
     },
     orderDate: {
-        fontSize: 8,
+        fontSize: 10,
         color: '#8B7355',
         marginBottom: 6,
         fontStyle: 'italic',
     },
     itemDisplay: {
         flex: 1,
+        marginTop: 2,
         justifyContent: 'center',
         marginBottom: 6,
+        minHeight: 50,
+        backgroundColor: 'transparent'
     },
     mainItem: {
-        fontSize: 11,
+        fontSize: 13,
         fontWeight: 'bold',
         color: '#874E3B',
         marginBottom: 2,
@@ -1281,24 +1296,41 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
-        marginBottom: 6,
+        marginBottom: 2,
         paddingTop: 4,
         borderTopWidth: 1,
         borderTopColor: '#E8D8C8',
+        backgroundColor: 'transparent'
     },
     totalLabel: {
-        fontSize: 8,
-        color: '#5A3921',
+        fontSize: 15,
+        color: '#854442',
         fontWeight: '600',
     },
     orderTotal: {
-        fontSize: 10,
+        fontSize: 15,
         fontWeight: 'bold',
+        color: '#854442',
+    },
+    cupsTag: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#F5E6D3',
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+        borderRadius: 4,
+        alignSelf: 'flex-start',
+        marginBottom: 6,
+        gap: 4,
+    },
+    cupsTagText: {
         color: '#874E3B',
+        fontSize: 8,
+        fontWeight: 'bold',
     },
     viewButton: {
         backgroundColor: '#874E3B',
-        paddingVertical: 4,
+        paddingVertical: 6,
         borderRadius: 6,
         alignItems: 'center',
         borderWidth: 1,
@@ -1306,14 +1338,17 @@ const styles = StyleSheet.create({
     },
     viewButtonText: {
         color: '#FFFEEA',
-        fontSize: 8,
+        fontSize: 9,
         fontWeight: 'bold',
     },
     loadingContainer: {
         padding: 20,
         alignItems: 'center',
         width: '100%',
-        backgroundColor: '#fffecaF2'
+        backgroundColor: 'transparent'
+    },
+    loadingContainers:{
+        color: '#854442'
     },
     emptyContainer: {
         flex: 1,
@@ -1321,11 +1356,16 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         paddingVertical: 60,
         width: '100%',
+        backgroundColor: '#F5E6D3',
+        borderRadius: 16,
+        borderWidth: 2,
+        borderColor: '#854442',
     },
     emptyText: {
         fontSize: 16,
         color: '#874E3B',
         marginTop: 12,
+        textAlign: 'center'
     },
     emptySubtext: {
         fontSize: 12,
@@ -1347,18 +1387,21 @@ const styles = StyleSheet.create({
         padding: 20,
         backgroundColor: '#F5E6D3',
         borderBottomWidth: 1,
-        borderBottomColor: '#D4A574',
+        borderBottomColor: '#854442',
     },
     modalHeaderLeft: {
         flex: 1,
+        backgroundColor: 'transparent'
     },
     modalHeaderRight: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: 12,
+        backgroundColor: 'transparent'
     },
     modalTitleContainer: {
         flex: 1,
+        backgroundColor: 'transparent'
     },
     modalStatusBadge: {
         flexDirection: 'row',
@@ -1379,7 +1422,7 @@ const styles = StyleSheet.create({
         backgroundColor: '#FFFEEA',
         borderRadius: 16,
         borderWidth: 2,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
         overflow: 'hidden',
         maxHeight: '90%',
         height: 'auto',
@@ -1387,41 +1430,95 @@ const styles = StyleSheet.create({
     modalTitle: {
         fontSize: 20,
         fontWeight: 'bold',
-        color: '#874E3B',
+        color: '#854442',
         fontFamily: 'LobsterTwoRegular',
         marginBottom: 4,
+        backgroundColor: 'transparent'
     },
     modalContent: {
         padding: 20,
+        backgroundColor: 'transparent'
     },
     customerSection: {
-        marginBottom: 16,
+        marginBottom: 12,
+        backgroundColor: 'transparent'
     },
     customerLabel: {
         fontSize: 14,
-        color: '#8B7355',
+        color: '#854442',
         marginBottom: 4,
     },
     customerInfo: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: '#5A3921',
+        fontSize: 20,
+        fontWeight: '700',
+        color: '#854442',
     },
     timeSection: {
-        marginBottom: 20,
+        marginBottom: 12,
+        backgroundColor: 'transparent'
     },
     timeLabel: {
         fontSize: 14,
-        color: '#8B7355',
+        color: '#854442',
         marginBottom: 4,
     },
     timeInfo: {
         fontSize: 16,
         fontWeight: '600',
-        color: '#5A3921',
+        color: '#854442',
+    },
+    orderTypeSection: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 12,
+        gap: 8,
+        backgroundColor: 'transparent'
+    },
+    orderTypeLabel: {
+        fontSize: 16,
+        color: '#854442',
+    },
+    orderTypeBadgeModal: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 10,
+        paddingVertical: 4,
+        borderRadius: 12,
+        gap: 4,
+    },
+    dineInBadge: {
+        backgroundColor: '#854442',
+    },
+    takeOutBadge: {
+        backgroundColor: '#854442',
+    },
+    orderTypeBadgeText: {
+        color: '#FFFEEA',
+        fontSize: 10,
+        fontWeight: 'bold',
+    },
+    cupsSection: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 16,
+        gap: 8,
+        backgroundColor: '#F5E6D3',
+        padding: 8,
+        borderRadius: 8,
+    },
+    cupsLabel: {
+        fontSize: 14,
+        color: '#874E3B',
+        fontWeight: 'bold',
+    },
+    cupsValue: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#874E3B',
     },
     itemsSection: {
         marginBottom: 20,
+        backgroundColor: 'transparent'
     },
     modalSubtitle: {
         fontSize: 12,
@@ -1440,9 +1537,11 @@ const styles = StyleSheet.create({
         paddingVertical: 8,
         borderBottomWidth: 1,
         borderBottomColor: '#E8D8C8',
+        backgroundColor: 'transparent'
     },
     itemInfo: {
         flex: 1,
+        backgroundColor: 'transparent'
     },
     itemName: {
         fontSize: 14,
@@ -1453,35 +1552,6 @@ const styles = StyleSheet.create({
         fontSize: 12,
         color: '#8B7355',
     },
-    // Sa styles, idugang niini:
-    checkingFirebaseContainer: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: '#FEF3C7',
-        padding: 8,
-        borderRadius: 6,
-        marginBottom: 8,
-        borderWidth: 1,
-        borderColor: '#D97706',
-    },
-    checkingFirebaseText: {
-        fontSize: 12,
-        color: '#92400E',
-        marginLeft: 8,
-        fontWeight: '500',
-    },
-    firebaseDataExists: {
-        fontSize: 12,
-        color: '#16A34A',
-        fontWeight: '600',
-        marginTop: 4,
-    },
-    firebaseDataEmpty: {
-        fontSize: 12,
-        color: '#DC2626',
-        fontWeight: '600',
-        marginTop: 4,
-    },
     itemCancelled: {
         textDecorationLine: 'line-through',
         color: '#DC2626',
@@ -1489,6 +1559,7 @@ const styles = StyleSheet.create({
     },
     quantitySection: {
         alignItems: 'flex-end',
+        backgroundColor: 'transparent'
     },
     itemQuantity: {
         fontSize: 14,
@@ -1503,14 +1574,16 @@ const styles = StyleSheet.create({
     },
     totalSectionModal: {
         borderTopWidth: 2,
-        borderTopColor: '#D4A574',
+        borderTopColor: '#854442',
         paddingTop: 16,
+        backgroundColor: 'transparent'
     },
     subtotalSection: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
         marginBottom: 8,
+        backgroundColor: 'transparent'
     },
     subtotalLabel: {
         fontSize: 14,
@@ -1528,6 +1601,7 @@ const styles = StyleSheet.create({
         paddingTop: 8,
         borderTopWidth: 1,
         borderTopColor: '#E8D8C8',
+        backgroundColor: 'transparent'
     },
     totalLabelModal: {
         fontSize: 16,
@@ -1549,13 +1623,14 @@ const styles = StyleSheet.create({
         backgroundColor: '#FFFEEA',
         borderRadius: 16,
         borderWidth: 2,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
         overflow: 'hidden',
     },
     itemsList: {
         flex: 1,
         padding: 16,
         maxHeight: '80%',
+        backgroundColor: 'transparent'
     },
     itemRowModal: {
         flexDirection: 'row',
@@ -1565,41 +1640,45 @@ const styles = StyleSheet.create({
         borderBottomWidth: 1,
         borderBottomColor: '#E8D8C8',
         minHeight: 60,
+        backgroundColor: 'transparent'
     },
     itemNameSection: {
         flex: 1,
         marginRight: 12,
+        backgroundColor: 'transparent'
     },
     itemNameModal: {
         fontSize: 18,
         fontWeight: '600',
-        color: '#5A3921',
+        color: '#854442',
         marginBottom: 4,
         flex: 1,
     },
     itemOrderInfo: {
         fontSize: 12,
-        color: '#8B7355',
+        color: '#854442',
         fontStyle: 'italic',
+        
     },
     itemPriceSection: {
         alignItems: 'flex-end',
         minWidth: 80,
+        backgroundColor: 'transparent'
     },
     itemQuantityModal: {
         fontSize: 16,
-        color: '#874E3B',
+        color: '#854442',
         marginBottom: 4,
     },
     itemPriceModal: {
         fontSize: 18,
         fontWeight: 'bold',
-        color: '#5A3921',
+        color: '#854442',
     },
     itemsFooter: {
         padding: 20,
         borderTopWidth: 2,
-        borderTopColor: '#D4A574',
+        borderTopColor: '#854442',
         backgroundColor: '#F5E6D3',
     },
     itemsTotal: {
@@ -1621,5 +1700,6 @@ const styles = StyleSheet.create({
     },
     closeButton: {
         padding: 4,
+        backgroundColor: 'transparent'
     },
 });

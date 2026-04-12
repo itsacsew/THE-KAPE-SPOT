@@ -3,7 +3,7 @@
     "name": "KapeSpot",
     "slug": "KapeSpot",
     "version": "1.0.0",
-    "orientation": "landscape",
+    "orientation": "portrait",
     "icon": "./assets/images/kape4.jpg",
     "scheme": "kapespot",
     "userInterfaceStyle": "automatic",
@@ -14,7 +14,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "screenOrientation": "landscape",
+        "screenOrientation": "portrait",
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/kape4.jpg",
         "backgroundImage": "./assets/images/kape4.jpg"

@@ -5,7 +5,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Feather } from "@expo/vector-icons";
 import Navbar from '@/components/Navbar';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { NetworkScanner } from '@/lib/network-scanner';
 import { useFocusEffect } from '@react-navigation/native';
 import React from 'react';
@@ -77,11 +77,12 @@ interface User {
 }
 
 export default function ItemsScreen() {
+    const params = useLocalSearchParams();
     const [searchQuery, setSearchQuery] = useState('');
     const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
     const [categories, setCategories] = useState<Category[]>([]);
     const [cupItems, setCupItems] = useState<CupItem[]>([]);
-    const [activeSidebar, setActiveSidebar] = useState('food-items');
+    const [activeSidebar, setActiveSidebar] = useState<'food-items' | 'categories' | 'cups'>('food-items');
     const [currentPage, setCurrentPage] = useState(1);
     const [loading, setLoading] = useState(false);
     const [cupsLoading, setCupsLoading] = useState(false);
@@ -100,7 +101,7 @@ export default function ItemsScreen() {
     const [editingCategory, setEditingCategory] = useState<Category | null>(null);
     const [categoryName, setCategoryName] = useState('');
     const [categoryIcon, setCategoryIcon] = useState('folder');
-    const [savingCategory, setSavingCategory] = useState(false); // ADDED: Spinner state
+    const [savingCategory, setSavingCategory] = useState(false);
 
     // Item Edit Modal states
     const [editItemModal, setEditItemModal] = useState(false);
@@ -119,6 +120,16 @@ export default function ItemsScreen() {
 
     const itemsPerPage = 10;
     const db = getFirestore(app);
+
+    // Listen for sidebar sub-menu changes from router params
+    useEffect(() => {
+        if (params.subMenu) {
+            const subMenu = params.subMenu as 'food-items' | 'categories' | 'cups';
+            if (subMenu === 'food-items' || subMenu === 'categories' || subMenu === 'cups') {
+                setActiveSidebar(subMenu);
+            }
+        }
+    }, [params.subMenu]);
 
     // Load current user data
     useEffect(() => {
@@ -176,8 +187,6 @@ export default function ItemsScreen() {
     const availableIcons = ['folder', 'coffee', 'star', 'shopping-bag', 'package', 'heart', 'bookmark', 'tag'];
 
     // Load menu items from Firebase - SEPARATE LOGIC FOR ONLINE vs OFFLINE
-    // Load menu items from Firebase - FIXED DUPLICATE ISSUE
-    // Load menu items from Firebase - FIXED: Show only one source based on mode
     const loadMenuItems = async () => {
         setLoading(true);
         try {
@@ -248,7 +257,7 @@ export default function ItemsScreen() {
         }
     };
 
-    // ADD THIS FUNCTION TO REMOVE DUPLICATES
+    // Remove duplicate items helper
     const removeDuplicateItems = (items: MenuItem[]): MenuItem[] => {
         const seen = new Set();
 
@@ -267,7 +276,6 @@ export default function ItemsScreen() {
     };
 
     // Load categories from Firebase
-    // Load categories from Firebase - FIXED: Show only one source based on mode
     const loadCategories = async () => {
         setCategoriesLoading(true);
         try {
@@ -360,7 +368,7 @@ export default function ItemsScreen() {
             console.log('🏁 [CATEGORY LOAD] Categories loading process completed');
         }
     };
-    // Load cups data - FIREBASE + LOCAL STORAGE
+    
     // Load cups data - FIXED: Show only one source based on mode
     const loadCups = async () => {
         setCupsLoading(true);
@@ -503,7 +511,7 @@ export default function ItemsScreen() {
         setEditingCategory(null);
         setCategoryName('');
         setCategoryIcon('folder');
-        setSavingCategory(false); // RESET: Reset spinner state when closing modal
+        setSavingCategory(false);
     };
 
     // Item Edit Functions
@@ -667,9 +675,7 @@ export default function ItemsScreen() {
         closeEditItemModal();
     };
 
-    // Save category - FIREBASE VERSION with AUTO SYNC
     // Save category - FIXED: Save to proper source based on mode
-    // Save category - FIXED: No duplicates in Firebase
     const saveCategory = async () => {
         if (!isAdmin) {
             Alert.alert('Access Denied', 'Only administrators can save categories.');
@@ -681,7 +687,6 @@ export default function ItemsScreen() {
             return;
         }
 
-        // ADDED: Set saving state to true to show spinner
         setSavingCategory(true);
 
         try {
@@ -734,7 +739,7 @@ export default function ItemsScreen() {
 
                         if (!querySnapshot.empty) {
                             Alert.alert('Error', 'Category with this name already exists in Firebase!');
-                            setSavingCategory(false); // ADDED: Reset spinner state
+                            setSavingCategory(false);
                             return;
                         }
 
@@ -819,10 +824,10 @@ export default function ItemsScreen() {
                 `Failed to save category: ${error instanceof Error ? error.message : 'Unknown error'}`
             );
         } finally {
-            // ADDED: Always reset saving state when done
             setSavingCategory(false);
         }
     };
+    
     // Save cup function - FIXED: Save to proper source based on mode
     const saveCup = async () => {
         if (!isAdmin) {
@@ -1429,7 +1434,6 @@ export default function ItemsScreen() {
         closeEditStocksModal();
     };
 
-    // Delete item - FIREBASE VERSION
     // Delete item - FIREBASE VERSION (FIXED)
     const deleteItem = async (id: string) => {
         if (!isAdmin) {
@@ -1583,6 +1587,7 @@ export default function ItemsScreen() {
             ]
         );
     };
+    
     // Toggle item status - FIREBASE VERSION
     const toggleStatus = async (id: string) => {
         if (!isAdmin) {
@@ -1630,75 +1635,7 @@ export default function ItemsScreen() {
                 resizeMode="cover"
             >
                 <ThemedView style={styles.content}>
-                    {/* Sidebar */}
-                    <ThemedView style={styles.sidebar}>
-                        <ThemedView style={styles.sidebarHeader}>
-                            <ThemedText style={styles.sidebarTitle}>ITEMS</ThemedText>
-                        </ThemedView>
-
-                        <TouchableOpacity
-                            style={[
-                                styles.sidebarItem,
-                                activeSidebar === 'food-items' && styles.sidebarItemActive
-                            ]}
-                            onPress={() => setActiveSidebar('food-items')}
-                        >
-                            <Feather
-                                name="package"
-                                size={20}
-                                color={activeSidebar === 'food-items' ? '#FFFEEA' : '#874E3B'}
-                            />
-                            <ThemedText style={[
-                                styles.sidebarText,
-                                activeSidebar === 'food-items' && styles.sidebarTextActive
-                            ]}>
-                                Food Items
-                            </ThemedText>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                            style={[
-                                styles.sidebarItem,
-                                activeSidebar === 'categories' && styles.sidebarItemActive
-                            ]}
-                            onPress={() => setActiveSidebar('categories')}
-                        >
-                            <Feather
-                                name="folder"
-                                size={20}
-                                color={activeSidebar === 'categories' ? '#FFFEEA' : '#874E3B'}
-                            />
-                            <ThemedText style={[
-                                styles.sidebarText,
-                                activeSidebar === 'categories' && styles.sidebarTextActive
-                            ]}>
-                                Categories
-                            </ThemedText>
-                        </TouchableOpacity>
-
-                        {/* Cups Section */}
-                        <TouchableOpacity
-                            style={[
-                                styles.sidebarItem,
-                                activeSidebar === 'cups' && styles.sidebarItemActive
-                            ]}
-                            onPress={() => setActiveSidebar('cups')}
-                        >
-                            <Feather
-                                name="coffee"
-                                size={20}
-                                color={activeSidebar === 'cups' ? '#FFFEEA' : '#874E3B'}
-                            />
-                            <ThemedText style={[
-                                styles.sidebarText,
-                                activeSidebar === 'cups' && styles.sidebarTextActive
-                            ]}>
-                                Cups
-                            </ThemedText>
-                        </TouchableOpacity>
-                    </ThemedView>
-
-                    {/* Main Content Area */}
+                    {/* Main Content Area - REMOVED SIDEBAR */}
                     <ThemedView style={styles.mainContent}>
                         {/* Header Section */}
                         <ThemedView style={styles.headerSection}>
@@ -2015,7 +1952,6 @@ export default function ItemsScreen() {
                                                 {/* Actions cell only for admin */}
                                                 {isAdmin && (
                                                     <ThemedView style={styles.cupActionsCell}>
-
                                                         <TouchableOpacity
                                                             style={styles.editButton}
                                                             onPress={() => openEditCupModal(cup)}
@@ -2067,8 +2003,6 @@ export default function ItemsScreen() {
                                 </TouchableOpacity>
                             </ThemedView>
 
-
-
                             <ThemedView style={styles.modalActions}>
                                 <TouchableOpacity
                                     style={styles.cancelModalButton}
@@ -2092,7 +2026,6 @@ export default function ItemsScreen() {
                     </ThemedView>
                 )}
 
-                {/* Category Modal */}
                 {/* Category Modal */}
                 <Modal
                     visible={categoryModalVisible}
@@ -2130,9 +2063,9 @@ export default function ItemsScreen() {
                                             onChangeText={setCategoryName}
                                             placeholder="Enter category name"
                                             placeholderTextColor="#9CA3AF"
-                                            autoFocus={true} // Auto focus on input
+                                            autoFocus={true}
                                             returnKeyType="done"
-                                            onSubmitEditing={saveCategory} // Allow saving with keyboard return
+                                            onSubmitEditing={saveCategory}
                                         />
                                     </ThemedView>
 
@@ -2189,9 +2122,8 @@ export default function ItemsScreen() {
                                 <TouchableOpacity
                                     style={styles.saveModalButton}
                                     onPress={saveCategory}
-                                    disabled={savingCategory} // ADDED: Disable button when saving
+                                    disabled={savingCategory}
                                 >
-                                    {/* ADDED: Show spinner when saving */}
                                     {savingCategory ? (
                                         <ActivityIndicator size="small" color="#FFFEEA" />
                                     ) : (
@@ -2282,7 +2214,6 @@ export default function ItemsScreen() {
                                             onPress={() => setShowCategoryDropdown(false)}
                                         >
                                             <ThemedView style={styles.dropdownContainer}>
-                                                {/* Header with Close Button (X) */}
                                                 <ThemedView style={styles.dropdownHeader}>
                                                     <ThemedText style={styles.dropdownTitle}>Select Category</ThemedText>
                                                     <TouchableOpacity
@@ -2446,38 +2377,12 @@ const styles = StyleSheet.create({
         padding: 16,
         backgroundColor: 'transparent',
     },
-    // ADD MODE INDICATOR STYLES
-    modeIndicatorContainer: {
-        position: 'absolute',
-        top: 10,
-        right: 10,
-        zIndex: 1000,
-        backgroundColor: 'rgba(255, 254, 234, 0.9)',
-        paddingHorizontal: 12,
-        paddingVertical: 6,
-        borderRadius: 20,
-        borderWidth: 2,
-    },
-    modeText: {
-        fontSize: 12,
-        fontWeight: 'bold',
-        backgroundColor: '#fffecaF2'
-    },
-    onlineModeText: {
-        color: '#fffecaF2',
-        borderColor: '#fffecaF2',
-    },
-    offlineModeText: {
-        color: '#fffecaF2',
-        borderColor: '#fffecaF2',
-    },
     modeInfo: {
         fontSize: 12,
         color: '#874E3B',
         fontStyle: 'italic',
         marginTop: 4,
         backgroundColor: 'fffecaF2'
-
     },
     sidebar: {
         width: 200,
@@ -2566,8 +2471,6 @@ const styles = StyleSheet.create({
         flex: 1,
         textAlign: 'center',
     },
-
-    // Status cell
     statusCell: {
         flex: 1,
         justifyContent: 'center',
@@ -2590,12 +2493,6 @@ const styles = StyleSheet.create({
         fontSize: 11,
         fontWeight: 'bold',
         textAlign: 'center',
-    },
-    onlineStatusText: {
-        color: '#16A34A',
-    },
-    offlineStatusText: {
-        color: '#DC2626',
     },
     searchContainer: {
         flexDirection: 'row',
@@ -2625,22 +2522,6 @@ const styles = StyleSheet.create({
         borderColor: '#D4A574',
         overflow: 'hidden',
     },
-    // Add these to your styles in Items.tsx
-    deliveredMode: {
-        backgroundColor: '#0084FF', // Messenger blue
-    },
-    sentMode: {
-        backgroundColor: 'transparent',
-        borderWidth: 1,
-        borderColor: '#666',
-    },
-    modeIconText: {
-        fontSize: 8,
-        fontWeight: 'bold',
-        color: '#FFF',
-        textAlign: 'center',
-        lineHeight: 12,
-    },
     tableHeader: {
         flexDirection: 'row',
         backgroundColor: '#874E3B',
@@ -2663,7 +2544,6 @@ const styles = StyleSheet.create({
         textAlign: 'left',
         paddingLeft: 8,
     },
-    // Add these to your styles
     iconText: {
         fontSize: 10,
         color: '#874E3B',
@@ -2693,7 +2573,6 @@ const styles = StyleSheet.create({
         flex: 1.5,
         textAlign: 'center',
     },
-    // Category specific headers
     categoryIconHeader: {
         flex: 0.8,
         textAlign: 'center',
@@ -2703,9 +2582,8 @@ const styles = StyleSheet.create({
         textAlign: 'left',
         paddingLeft: 8,
     },
-    // Add these to your styles:
     modalContentScroll: {
-        maxHeight: 400, // Limit height to prevent modal from being too tall
+        maxHeight: 400,
     },
     modalContent: {
         padding: 20,
@@ -2732,7 +2610,6 @@ const styles = StyleSheet.create({
         flex: 1.2,
         textAlign: 'center',
     },
-    // Cup specific headers
     cupNameHeader: {
         flex: 2,
         textAlign: 'left',
@@ -2792,7 +2669,6 @@ const styles = StyleSheet.create({
         fontWeight: 'bold',
         color: '#874E3B',
     },
-    // Add to your styles
     checkIndicator: {
         width: 15,
         height: 15,
@@ -2814,7 +2690,6 @@ const styles = StyleSheet.create({
         textAlign: 'center',
         fontWeight: 'bold',
     },
-    // Category specific cells
     categoryIconCell: {
         flex: 0.8,
         justifyContent: 'center',
@@ -2842,7 +2717,6 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         gap: 6,
     },
-    // Cup specific cells
     cupNameCell: {
         flex: 2,
         textAlign: 'left',
@@ -2923,7 +2797,6 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: '#DC2626',
     },
-    // Cup action buttons
     stockButton: {
         width: 32,
         height: 32,
@@ -3058,8 +2931,6 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         backgroundColor: 'transparent',
     },
-
-    // Modal Styles
     modalOverlay: {
         position: 'absolute',
         top: 0,
@@ -3111,7 +2982,6 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: '#D4A574',
     },
-
     inputContainer: {
         marginTop: 16,
     },
@@ -3168,7 +3038,6 @@ const styles = StyleSheet.create({
         fontSize: 14,
         fontWeight: 'bold',
     },
-    // Category Modal Styles
     iconsContainer: {
         flexDirection: 'row',
         marginTop: 8,
@@ -3188,7 +3057,6 @@ const styles = StyleSheet.create({
         backgroundColor: '#874E3B',
         borderColor: '#874E3B',
     },
-    // Category Dropdown Styles
     categoryDropdown: {
         backgroundColor: '#FFFFFF',
         borderWidth: 1,
@@ -3215,7 +3083,7 @@ const styles = StyleSheet.create({
         borderColor: '#D4A574',
         width: '80%',
         maxHeight: 300,
-        overflow: 'hidden', // Add this to contain the header
+        overflow: 'hidden',
     },
     dropdownHeader: {
         flexDirection: 'row',
@@ -3233,7 +3101,7 @@ const styles = StyleSheet.create({
         color: '#874E3B',
     },
     dropdownScrollView: {
-        maxHeight: 300 - 50, // Adjust height to account for header
+        maxHeight: 300 - 50,
     },
     categoryOption: {
         paddingHorizontal: 16,

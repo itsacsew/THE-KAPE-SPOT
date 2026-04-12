@@ -29,7 +29,7 @@ import {
     query,
     where,
     orderBy,
-    onSnapshot // ADDED: for realtime updates
+    onSnapshot
 } from 'firebase/firestore';
 import { app } from '@/lib/firebase-config';
 
@@ -56,8 +56,9 @@ interface OrderData {
 }
 
 const { width } = Dimensions.get('window');
-const CARD_MARGIN = 3.7;
-const CARD_WIDTH = (width - (CARD_MARGIN * 20)) / 4;
+// Calculate card width for 2 columns with consistent spacing
+const CARD_MARGIN = 12;
+const CARD_WIDTH = (width - (CARD_MARGIN * 3)) / 2; // 2 columns: (screenWidth - (margin*3)) / 2
 
 export const getOrderNumberIndicator = (orders: OrderData[], orderId: string) => {
     const index = orders.findIndex(order => order.orderId === orderId);
@@ -72,7 +73,7 @@ export default function OrderStatusScreen() {
     const [showActionModal, setShowActionModal] = useState(false);
     const [selectedOrderType, setSelectedOrderType] = useState<'all' | 'dine-in' | 'take-out'>('all');
     const [isProcessing, setIsProcessing] = useState(false);
-    const [unsubscribe, setUnsubscribe] = useState<(() => void) | null>(null); // ADDED: unsubscribe function for realtime listener
+    const [unsubscribe, setUnsubscribe] = useState<(() => void) | null>(null);
     const [hasFirebaseData, setHasFirebaseData] = useState<boolean>(false);
     const [checkingFirebase, setCheckingFirebase] = useState<boolean>(false);
     const [lastUpdate, setLastUpdate] = useState<string>('');
@@ -92,7 +93,7 @@ export default function OrderStatusScreen() {
         }
     };
 
-    // ADDED: Setup realtime listener for Firebase
+    // Setup realtime listener for Firebase
     const setupRealtimeListener = () => {
         try {
             console.log('🔥 Setting up realtime listener for ALL orders from Firebase...');
@@ -134,11 +135,9 @@ export default function OrderStatusScreen() {
                         firebaseOrders.push(order);
                     });
 
-                    // Check if there's data in Firebase
                     const hasData = firebaseOrders.length > 0;
                     setHasFirebaseData(hasData);
 
-                    // Filter only unpaid orders for order status screen
                     const unpaidOrders = firebaseOrders.filter(order => order.status === 'unpaid');
 
                     setOrders(unpaidOrders);
@@ -151,7 +150,6 @@ export default function OrderStatusScreen() {
                 },
                 (error) => {
                     console.error('❌ Error in realtime listener:', error);
-                    // Fallback to regular loading if realtime fails
                     loadOrders();
                 }
             );
@@ -161,12 +159,10 @@ export default function OrderStatusScreen() {
 
         } catch (error) {
             console.error('❌ Error setting up realtime listener:', error);
-            // Fallback to regular loading
             loadOrders();
         }
     };
 
-    // ADDED: Cleanup realtime listener
     const cleanupRealtimeListener = () => {
         if (unsubscribe) {
             console.log('🧹 Cleaning up realtime listener...');
@@ -184,16 +180,12 @@ export default function OrderStatusScreen() {
             let allOrders: OrderData[] = [];
 
             if (connectionMode === 'offline') {
-                // Load from local storage - ALL ORDERS but filter for UNPAID only
                 console.log('📱 Loading orders from local storage...');
                 const localOrders = await syncService.getPendingReceipts();
                 allOrders = localOrders.filter(order => order.status === 'unpaid');
                 console.log('📱 Local orders loaded:', allOrders.length);
-
-                setHasFirebaseData(false); // Offline mode, no Firebase data
-
+                setHasFirebaseData(false);
             } else {
-                // Online mode - manual refresh as backup to real-time listener
                 console.log('🔥 Online mode - Manual refresh as backup...');
 
                 try {
@@ -228,10 +220,7 @@ export default function OrderStatusScreen() {
                         };
                     });
 
-                    // Check if there's data in Firebase
                     setHasFirebaseData(firebaseOrders.length > 0);
-
-                    // Filter only unpaid orders for order status
                     allOrders = firebaseOrders.filter(order => order.status === 'unpaid');
 
                     console.log('🔥 Firebase orders loaded:', {
@@ -240,7 +229,6 @@ export default function OrderStatusScreen() {
                         hasFirebaseData: firebaseOrders.length > 0
                     });
 
-                    // Setup realtime listener after initial load
                     setupRealtimeListener();
 
                 } catch (firebaseError) {
@@ -258,7 +246,6 @@ export default function OrderStatusScreen() {
 
         } catch (error) {
             console.error('❌ Error loading orders:', error);
-            // Final fallback - try to get from local storage
             try {
                 const syncService = OfflineSyncService.getInstance();
                 const localOrders = await syncService.getPendingReceipts();
@@ -277,7 +264,6 @@ export default function OrderStatusScreen() {
         }
     };
 
-    // Check if Firebase has data on component mount
     const checkFirebaseData = async () => {
         try {
             const connectionMode = await getConnectionMode();
@@ -309,13 +295,11 @@ export default function OrderStatusScreen() {
         }
     };
 
-    // UPDATE: useFocusEffect to include Firebase data check
     useFocusEffect(
         React.useCallback(() => {
             loadOrders();
             checkFirebaseData();
 
-            // Cleanup when screen loses focus
             return () => {
                 cleanupRealtimeListener();
             };
@@ -326,10 +310,6 @@ export default function OrderStatusScreen() {
         if (selectedOrderType === 'all') return true;
         return order.orderType === selectedOrderType;
     });
-
-    const getOrderNumberIndicator = (index: number) => {
-        return (index + 1).toString().padStart(2, '0');
-    };
 
     const toggleItemReady = async (orderId: string, itemIndex: number) => {
         try {
@@ -439,23 +419,20 @@ export default function OrderStatusScreen() {
 
             console.log('🔄 Cancelling item:', orderId, itemIndex);
 
-            // Calculate new totals
             setOrders(prevOrders => {
                 return prevOrders.map(order => {
                     if (order.orderId === orderId) {
                         const updatedItems = [...order.items];
                         const isCurrentlyCancelled = updatedItems[itemIndex].cancelled;
 
-                        // Toggle cancelled status
                         updatedItems[itemIndex] = {
                             ...updatedItems[itemIndex],
                             cancelled: !isCurrentlyCancelled
                         };
 
-                        // Calculate new subtotal and total
                         const activeItems = updatedItems.filter(item => !item.cancelled);
                         const newSubtotal = activeItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-                        const newTotal = newSubtotal; // Assuming no taxes/discounts for now
+                        const newTotal = newSubtotal;
 
                         const allItemsReady = updatedItems.every(item => item.ready || item.cancelled);
 
@@ -542,7 +519,6 @@ export default function OrderStatusScreen() {
 
                     const currentOrder = updatedLocalOrders.find(order => order.orderId === orderId);
                     if (currentOrder) {
-                        // Only send non-cancelled items to Firebase
                         const itemsForFirebase = currentOrder.items.filter(item => !item.cancelled);
 
                         await updateDoc(orderDoc, {
@@ -577,7 +553,7 @@ export default function OrderStatusScreen() {
                     if (order.orderId === orderId) {
                         const updatedItems = order.items.map(item => ({
                             ...item,
-                            ready: !item.cancelled // Only mark non-cancelled items as ready
+                            ready: !item.cancelled
                         }));
                         return {
                             ...order,
@@ -594,7 +570,7 @@ export default function OrderStatusScreen() {
                     if (!prev) return null;
                     const updatedItems = prev.items.map(item => ({
                         ...item,
-                        ready: !item.cancelled // Only mark non-cancelled items as ready
+                        ready: !item.cancelled
                     }));
                     return {
                         ...prev,
@@ -635,7 +611,6 @@ export default function OrderStatusScreen() {
 
                     const currentOrder = updatedLocalOrders.find(order => order.orderId === orderId);
                     if (currentOrder) {
-                        // Only send non-cancelled items to Firebase
                         const itemsForFirebase = currentOrder.items.filter(item => !item.cancelled);
 
                         await updateDoc(orderDoc, {
@@ -660,18 +635,15 @@ export default function OrderStatusScreen() {
 
     const updateOrderStatus = async (orderId: string, newStatus: 'paid' | 'cancelled') => {
         try {
-            setIsProcessing(true); // START PROCESSING - SHOW SPINNER
+            setIsProcessing(true);
 
             const syncService = OfflineSyncService.getInstance();
             const connectionMode = await getConnectionMode();
 
             console.log('🔄 Updating order status:', orderId, newStatus);
 
-            // Check if all items are cancelled
             const order = orders.find(order => order.orderId === orderId);
             const allItemsCancelled = order && order.items.every(item => item.cancelled);
-
-            // If all items are cancelled, automatically mark as 'cancelled' instead of 'paid'
             const finalStatus = allItemsCancelled ? 'cancelled' : newStatus;
 
             console.log('📱 Updating local storage...');
@@ -712,7 +684,6 @@ export default function OrderStatusScreen() {
 
             setOrders(prev => prev.filter(order => order.orderId !== orderId));
 
-            // SUCCESS - Show alert after processing is complete
             Alert.alert('Success', `Order marked as ${finalStatus}`);
             setShowActionModal(false);
             setSelectedOrder(null);
@@ -721,7 +692,7 @@ export default function OrderStatusScreen() {
             console.error('❌ Error updating order:', error);
             Alert.alert('Error', 'Failed to update order status');
         } finally {
-            setIsProcessing(false); // STOP PROCESSING - HIDE SPINNER
+            setIsProcessing(false);
         }
     };
 
@@ -789,36 +760,25 @@ export default function OrderStatusScreen() {
         return items.filter(item => !item.cancelled);
     };
 
-    // ADDED: Check if all active items are ready (cancelled items are considered as "completed")
     const areAllItemsReady = (order: OrderData | null) => {
         if (!order) return false;
-
-        // Get only active (non-cancelled) items
         const activeItems = order.items.filter(item => !item.cancelled);
-
-        // If there are no active items (all cancelled), order is ready to complete
-        if (activeItems.length === 0) {
-            return true;
-        }
-
-        // Check if all active items are marked as ready
+        if (activeItems.length === 0) return true;
         return activeItems.every(item => item.ready);
     };
 
     return (
         <ThemedView style={styles.container}>
-            <Navbar activeNav="order-status" />
-
             <ImageBackground
                 source={require('@/assets/images/kape1.png')}
                 style={styles.backgroundImage}
                 resizeMode="cover"
             >
+                <Navbar activeNav="order-status" />
                 <ThemedView style={styles.content}>
                     {/* Header Container */}
                     <ThemedView style={styles.headerContainer}>
                         <ThemedView style={styles.headerSection}>
-                            {/* Sa header section, idugang ang Firebase status */}
                             <ThemedView style={styles.headerTop}>
                                 <ThemedText style={styles.mainTitle}>Order Status</ThemedText>
                                 <TouchableOpacity
@@ -830,19 +790,13 @@ export default function OrderStatusScreen() {
                             </ThemedView>
 
                             <ThemedText style={styles.modeInfo}>
-                                {isOnlineMode ? '🔥 Connected to Firebase - Realtime updates active' : '📱 Using local storage - Showing local data'}     {lastUpdate && (
+                                {isOnlineMode ? '🔥 Connected to Firebase - Realtime updates active' : '📱 Using local storage - Showing local data'}
+                                {lastUpdate && (
                                     <ThemedText style={styles.lastUpdateText}>
-                                        Last update: {lastUpdate}
+                                        {' '}Last update: {lastUpdate}
                                     </ThemedText>
                                 )}
                             </ThemedText>
-
-                            {/* Firebase Data Status */}
-
-
-                            {/* Last Update Time */}
-
-
 
                             {/* ORDER TYPE FILTERS */}
                             <ThemedView style={styles.orderTypeFilters}>
@@ -892,17 +846,17 @@ export default function OrderStatusScreen() {
                                         TAKE OUT
                                     </Text>
                                 </TouchableOpacity>
-                                <ThemedView style={styles.orderCountContainer}>
-                                    <ThemedText style={styles.orderCountText}>
-                                        Total Orders: <Text style={styles.orderCountNumber}>{filteredOrders.length}</Text>
-                                    </ThemedText>
-                                </ThemedView>
                             </ThemedView>
 
+                            <ThemedView style={styles.orderCountContainer}>
+                                <ThemedText style={styles.orderCountText}>
+                                    Total Orders: <Text style={styles.orderCountNumber}>{filteredOrders.length}</Text>
+                                </ThemedText>
+                            </ThemedView>
                         </ThemedView>
                     </ThemedView>
 
-                    {/* Orders Grid Container */}
+                    {/* Orders Grid Container - 2 COLUMNS LAYOUT */}
                     <ThemedView style={styles.ordersContainer}>
                         <ScrollView
                             style={styles.scrollView}
@@ -935,16 +889,16 @@ export default function OrderStatusScreen() {
                                         {/* ORDER NUMBER INDICATOR */}
                                         <ThemedView style={styles.orderNumberContainer}>
                                             <ThemedText style={styles.orderNumberText}>
-                                                {getOrderNumberIndicator(index)}
+                                                {(index + 1).toString().padStart(2, '0')}
                                             </ThemedText>
                                         </ThemedView>
 
                                         {/* Order Header */}
                                         <ThemedView style={styles.orderHeader}>
                                             <ThemedText style={styles.orderId}>
-                                                #{getOrderNumberIndicator(index)}
+                                                #{order.orderId}
                                             </ThemedText>
-                                            <ThemedView style={[styles.statusBadge, { backgroundColor: 'red' }]}>
+                                            <ThemedView style={[styles.statusBadge, { backgroundColor: '#DC2626' }]}>
                                                 <Text style={styles.statusText}>
                                                     UNPAID
                                                 </Text>
@@ -1042,7 +996,7 @@ export default function OrderStatusScreen() {
                                 <ThemedView style={styles.modalHeader}>
                                     <ThemedView style={styles.modalTitleContainer}>
                                         <ThemedText style={styles.modalTitle}>
-                                            Order #{getOrderNumberIndicator(filteredOrders.findIndex(order => order.orderId === selectedOrder?.orderId))}
+                                            Order #{selectedOrder?.orderId}
                                         </ThemedText>
                                         {selectedOrder?.orderType && (
                                             <ThemedView style={[styles.modalOrderTypeBadge, { backgroundColor: getOrderTypeColor(selectedOrder.orderType) }]}>
@@ -1180,7 +1134,6 @@ export default function OrderStatusScreen() {
                                     </ThemedView>
 
                                     <ThemedView style={styles.actionButtons}>
-                                        {/* UPDATED: DONE button with spinner */}
                                         <TouchableOpacity
                                             style={[
                                                 styles.actionButtonModal,
@@ -1191,10 +1144,8 @@ export default function OrderStatusScreen() {
                                             disabled={!areAllItemsReady(selectedOrder) || isProcessing}
                                         >
                                             {isProcessing ? (
-                                                // Show spinner when processing
                                                 <ActivityIndicator size="small" color="#FFFEEA" />
                                             ) : (
-                                                // Show normal content when not processing
                                                 <>
                                                     <Feather
                                                         name="check-circle"
@@ -1236,6 +1187,7 @@ const styles = StyleSheet.create({
     },
     headerContainer: {
         marginBottom: 16,
+        backgroundColor: 'transparent'
     },
     headerSection: {
         backgroundColor: "#fffecaF2",
@@ -1259,6 +1211,13 @@ const styles = StyleSheet.create({
         fontSize: 12,
         color: '#874E3B',
         fontStyle: 'italic',
+        marginBottom: 8,
+    },
+    lastUpdateText: {
+        fontSize: 11,
+        color: '#8B7355',
+        fontStyle: 'italic',
+        fontWeight: 'bold',
     },
     ordersContainer: {
         flex: 1,
@@ -1271,20 +1230,21 @@ const styles = StyleSheet.create({
     scrollView: {
         flex: 1,
     },
+    // UPDATED: Orders grid with 2 columns
     ordersGrid: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        justifyContent: 'flex-start',
+        justifyContent: 'space-between',
     },
+    // UPDATED: Order card for 2 columns layout
     orderCard: {
         width: CARD_WIDTH,
-        height: CARD_WIDTH,
+        marginBottom: CARD_MARGIN,
         backgroundColor: "#FFFEEA",
         borderRadius: 12,
-        padding: 10,
+        padding: 12,
         borderWidth: 2,
         borderColor: '#D4A574',
-        margin: CARD_MARGIN / 2,
         shadowColor: '#000',
         shadowOffset: {
             width: 0,
@@ -1293,35 +1253,33 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.1,
         shadowRadius: 3.84,
         elevation: 5,
-        justifyContent: 'space-between',
     },
     orderHeader: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'flex-start',
-        marginLeft: 15,
+        marginLeft: 25,
         marginBottom: 6,
         backgroundColor: "#FFFEEA",
     },
     orderId: {
-        fontSize: 15,
+        fontSize: 12,
         fontWeight: 'bold',
         color: '#874E3B',
         fontFamily: 'LobsterTwoRegular',
         flex: 1,
     },
     statusBadge: {
-        paddingHorizontal: 10,
+        paddingHorizontal: 8,
         paddingVertical: 2,
         borderRadius: 6,
         marginLeft: 4,
     },
     statusText: {
         color: '#FFFEEA',
-        fontSize: 10,
+        fontSize: 8,
         fontWeight: 'bold',
     },
-    // UPDATED: Customer and Time side by side
     customerTimeRow: {
         flexDirection: 'row',
         justifyContent: 'space-between',
@@ -1331,31 +1289,33 @@ const styles = StyleSheet.create({
         borderRadius: 10,
         borderWidth: 1,
         borderColor: '#D4A574',
+        paddingHorizontal: 6,
+        paddingVertical: 4,
     },
     customerName: {
-        fontSize: 18,
+        fontSize: 12,
         fontWeight: '600',
         color: '#5A3921',
         flex: 1,
-        marginLeft: 10,
     },
     orderTime: {
-        fontSize: 15,
+        fontSize: 10,
         color: '#8B7355',
         fontStyle: 'italic',
         marginLeft: 8,
     },
     itemDisplay: {
-        flex: 1,
         justifyContent: 'center',
         marginBottom: 6,
         backgroundColor: "#fffecaF2",
         borderWidth: 1,
         borderColor: '#D4A574',
         borderRadius: 12,
+        padding: 6,
+        minHeight: 45,
     },
     mainItem: {
-        fontSize: 11,
+        fontSize: 10,
         fontWeight: 'bold',
         color: '#874E3B',
         marginBottom: 2,
@@ -1378,18 +1338,18 @@ const styles = StyleSheet.create({
         borderTopColor: '#E8D8C8',
     },
     totalLabel: {
-        fontSize: 15,
+        fontSize: 12,
         color: '#5A3921',
         fontWeight: '600',
     },
     orderTotal: {
-        fontSize: 15,
+        fontSize: 12,
         fontWeight: 'bold',
         color: '#874E3B',
     },
     actionButton: {
         backgroundColor: '#D4A574',
-        paddingVertical: 4,
+        paddingVertical: 6,
         borderRadius: 6,
         alignItems: 'center',
         borderWidth: 1,
@@ -1397,7 +1357,7 @@ const styles = StyleSheet.create({
     },
     actionButtonText: {
         color: '#FFFEEA',
-        fontSize: 8,
+        fontSize: 10,
         fontWeight: 'bold',
     },
     loadingContainer: {
@@ -1462,13 +1422,14 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         flex: 1,
+        flexWrap: 'wrap',
+        gap: 8,
     },
     modalTitle: {
-        fontSize: 20,
+        fontSize: 16,
         fontWeight: 'bold',
         color: '#874E3B',
         fontFamily: 'LobsterTwoRegular',
-        marginRight: 12,
     },
     modalOrderTypeBadge: {
         flexDirection: 'row',
@@ -1486,7 +1447,6 @@ const styles = StyleSheet.create({
     modalContent: {
         padding: 20,
     },
-    // UPDATED: Customer and Time side by side in modal
     customerTimeRowModal: {
         flexDirection: 'row',
         justifyContent: 'space-between',
@@ -1561,7 +1521,7 @@ const styles = StyleSheet.create({
         marginLeft: 8,
     },
     itemsScrollView: {
-        maxHeight: 200, // Adjust this value as needed
+        maxHeight: 200,
     },
     itemNameReady: {
         textDecorationLine: 'line-through',
@@ -1605,45 +1565,6 @@ const styles = StyleSheet.create({
         fontWeight: 'bold',
         color: '#874E3B',
     },
-    // Sa styles, idugang:
-    firebaseDataStatus: {
-        fontSize: 12,
-        fontWeight: '600',
-        marginTop: 4,
-        textAlign: 'center',
-    },
-    firebaseDataExists: {
-        color: '#16A34A',
-    },
-    firebaseDataEmpty: {
-        color: '#DC2626',
-    },
-    checkingFirebaseContainer: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: '#FEF3C7',
-        padding: 8,
-        borderRadius: 6,
-        marginBottom: 8,
-        borderWidth: 1,
-        borderColor: '#D97706',
-    },
-    checkingFirebaseText: {
-        fontSize: 12,
-        color: '#92400E',
-        marginLeft: 8,
-        fontWeight: '500',
-    },
-    lastUpdateText: {
-        fontSize: 11,
-        color: '#8B7355',
-        fontStyle: 'italic',
-        marginBottom: 8,
-        textAlign: 'center',
-        fontWeight: 'bold',
-
-    },
     actionButtons: {
         flexDirection: 'row',
         justifyContent: 'space-between',
@@ -1670,18 +1591,17 @@ const styles = StyleSheet.create({
         fontWeight: 'bold',
         textAlign: 'center',
     },
-
-    // ORDER TYPE FILTER STYLES
     orderTypeFilters: {
         flexDirection: 'row',
         gap: 8,
         justifyContent: 'center',
-        backgroundColor: '#fffecaF2'
+        backgroundColor: '#fffecaF2',
+        marginBottom: 12,
     },
     orderTypeFilterButton: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingHorizontal: 100,
+        paddingHorizontal: 12,
         paddingVertical: 8,
         borderRadius: 20,
         borderWidth: 1,
@@ -1701,8 +1621,6 @@ const styles = StyleSheet.create({
     orderTypeFilterTextActive: {
         color: '#FFFEEA',
     },
-
-    // ORDER TYPE INDICATOR STYLES IN CARD
     orderTypeContainer: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -1721,8 +1639,6 @@ const styles = StyleSheet.create({
         fontWeight: 'bold',
         color: '#874E3B',
     },
-
-    // CUPS USED STYLES
     cupsUsedContainer: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -1735,15 +1651,13 @@ const styles = StyleSheet.create({
         color: '#874E3B',
         fontWeight: '500',
     },
-
-    // ADDED: Order Number Indicator Styles
     orderNumberContainer: {
         position: 'absolute',
         top: -5,
         left: -5,
         backgroundColor: '#874E3B',
-        width: 30,
-        height: 30,
+        width: 28,
+        height: 28,
         borderRadius: 10,
         justifyContent: 'center',
         alignItems: 'center',
@@ -1753,14 +1667,12 @@ const styles = StyleSheet.create({
     },
     orderNumberText: {
         color: '#FFFEEA',
-        fontSize: 10,
+        fontSize: 12,
         fontWeight: 'bold',
     },
-
-    // ADDED: Order Count Indicator Styles
     orderCountContainer: {
         alignSelf: 'flex-end',
-        marginVertical: 4,
+        marginTop: 8,
         paddingHorizontal: 12,
         paddingVertical: 4,
         backgroundColor: '#F5E6D3',
@@ -1778,8 +1690,6 @@ const styles = StyleSheet.create({
         fontWeight: 'bold',
         color: '#5A3921',
     },
-
-    // ADDED: Checkbox Styles
     checkboxContainer: {
         padding: 4,
     },
@@ -1797,8 +1707,6 @@ const styles = StyleSheet.create({
         backgroundColor: '#16A34A',
         borderColor: '#16A34A',
     },
-
-    // ADDED: Mark All Button Styles
     markAllButton: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -1813,17 +1721,16 @@ const styles = StyleSheet.create({
         fontSize: 12,
         fontWeight: 'bold',
     },
-
-    // ADDED: Ready Progress Styles
     readyProgressContainer: {
         marginBottom: 4,
         backgroundColor: "#fffecaF2",
         borderWidth: 1,
         borderColor: '#D4A574',
         borderRadius: 12,
+        padding: 4,
     },
     readyProgressText: {
-        fontSize: 20,
+        fontSize: 10,
         color: '#874E3B',
         fontWeight: '500',
         textAlign: 'center',
@@ -1859,8 +1766,6 @@ const styles = StyleSheet.create({
         color: '#5A3921',
         textAlign: 'center',
     },
-
-    // ADDED: Cancel Item Button Styles
     cancelItemButton: {
         padding: 4,
         marginLeft: 8,
@@ -1869,8 +1774,6 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
     },
-
-    // ADDED: Disabled Button Styles
     disabledButton: {
         backgroundColor: '#9CA3AF',
         borderColor: '#6B7280',

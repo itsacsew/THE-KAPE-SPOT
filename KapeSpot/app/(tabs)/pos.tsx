@@ -9,7 +9,8 @@ import {
     Alert,
     Image,
     Animated,
-    Text
+    Text,
+    Modal
 } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -30,7 +31,7 @@ import {
     where
 } from 'firebase/firestore';
 import { app } from '@/lib/firebase-config';
-import BleManager from 'react-native-ble-manager';
+
 interface MenuItem {
     id: string;
     code: string;
@@ -100,6 +101,170 @@ interface BluetoothConnection {
     connectedAt: string | null;
 }
 
+// Order Summary Modal Component - MOVED OUTSIDE to prevent re-renders
+const OrderSummaryModal = ({ 
+    visible, 
+    onClose, 
+    customerName, 
+    setCustomerName, 
+    cart, 
+    subtotal, 
+    total, 
+    orderType, 
+    updateQuantity, 
+    clearCart, 
+    placeOrder, 
+    loading, 
+    isProcessingOrder,
+    isBluetoothConnected 
+}: { 
+    visible: boolean;
+    onClose: () => void;
+    customerName: string;
+    setCustomerName: (name: string) => void;
+    cart: MenuItem[];
+    subtotal: number;
+    total: number;
+    orderType: 'dine-in' | 'take-out' | null;
+    updateQuantity: (id: string, quantity: number) => void;
+    clearCart: () => void;
+    placeOrder: () => void;
+    loading: boolean;
+    isProcessingOrder: boolean;
+    isBluetoothConnected: boolean;
+}) => (
+    <Modal
+        visible={visible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={onClose}
+        statusBarTranslucent={true}
+    >
+        <ThemedView style={styles.modalOverlay}>
+            <ThemedView style={styles.orderSummaryModal}>
+                <ThemedView style={styles.modalHeader}>
+                    <ThemedView style={styles.modalTitleContainer}>
+                        <ThemedText style={styles.modalTitle}>Order Summary</ThemedText>
+                        {/* Bluetooth Icon next to title */}
+                        {isBluetoothConnected ? (
+                            <Feather name="bluetooth" size={18} color="#007AFF" style={styles.headerBluetoothIcon} />
+                        ) : (
+                            <Feather name="bluetooth" size={18} color="#DC2626" style={styles.headerBluetoothIcon} />
+                        )}
+                    </ThemedView>
+                    <TouchableOpacity
+                        style={styles.closeModalButton}
+                        onPress={onClose}
+                    >
+                        <Feather name="x" size={24} color="#854442" />
+                    </TouchableOpacity>
+                </ThemedView>
+
+                {/* Customer Name Input */}
+                <ThemedView style={styles.customerInputContainer}>
+                    <ThemedText style={styles.inputLabel}>Customer Name:</ThemedText>
+                    <TextInput
+                        style={styles.customerInput}
+                        value={customerName}
+                        onChangeText={setCustomerName}
+                        placeholder="Enter customer name"
+                        placeholderTextColor="#9CA3AF"
+                    />
+                </ThemedView>
+
+                {/* Order Table Header */}
+                <ThemedView style={styles.tableHeader}>
+                    <ThemedText style={[styles.headerText, styles.itemHeader]}>Item</ThemedText>
+                    <ThemedText style={[styles.headerText, styles.priceHeader]}>Price</ThemedText>
+                    <ThemedText style={[styles.headerText, styles.qtyHeader]}>Qnt.</ThemedText>
+                    <ThemedText style={[styles.headerText, styles.totalHeader]}>Total (₱)</ThemedText>
+                </ThemedView>
+
+                {/* Order Items List - INCREASED HEIGHT */}
+                <ScrollView style={styles.orderListExpanded}>
+                    {cart.length === 0 ? (
+                        <ThemedView style={styles.emptyCartExpanded}>
+                            <Feather name="shopping-cart" size={48} color="#D4A574" />
+                            <ThemedText style={styles.emptyCartText}>No items in cart</ThemedText>
+                            <ThemedText style={styles.emptyCartSubText}>
+                                {orderType ? 'Tap on menu items to add them' : 'Select order type first'}
+                            </ThemedText>
+                        </ThemedView>
+                    ) : (
+                        cart.map((item, index) => (
+                            <ThemedView key={`${item.id}-${index}`} style={styles.orderRow}>
+                                <ThemedText style={[styles.cellText, styles.itemCell]} numberOfLines={2}>
+                                    {item.name} {item.isOffline && '📱'}
+                                </ThemedText>
+                                <ThemedText style={[styles.cellText, styles.priceCell]}>₱{item.price.toFixed(2)}</ThemedText>
+                                <ThemedView style={styles.qtyCell}>
+                                    <TouchableOpacity
+                                        style={styles.qtyButton}
+                                        onPress={() => updateQuantity(item.id, item.quantity - 1)}
+                                    >
+                                        <Feather name="minus" size={12} color="#874E3B" />
+                                    </TouchableOpacity>
+                                    <ThemedText style={styles.qtyText}>{item.quantity}</ThemedText>
+                                    <TouchableOpacity
+                                        style={styles.qtyButton}
+                                        onPress={() => updateQuantity(item.id, item.quantity + 1)}
+                                    >
+                                        <Feather name="plus" size={12} color="#874E3B" />
+                                    </TouchableOpacity>
+                                </ThemedView>
+                                <ThemedText style={[styles.cellText, styles.totalCell]}>
+                                    ₱{(item.price * item.quantity).toFixed(2)}
+                                </ThemedText>
+                            </ThemedView>
+                        ))
+                    )}
+                </ScrollView>
+
+                {/* Totals Section */}
+                <ThemedView style={styles.totalsSection}>
+                    <ThemedView style={styles.totalRow}>
+                        <ThemedText style={styles.totalLabel}>Sub total</ThemedText>
+                        <ThemedText style={styles.totalValue}>₱{subtotal.toFixed(2)}</ThemedText>
+                    </ThemedView>
+                    <ThemedView style={styles.totalRow}>
+                        <ThemedText style={styles.totalLabel}>Other Charge</ThemedText>
+                        <ThemedText style={styles.totalValue}>₱0.00</ThemedText>
+                    </ThemedView>
+                    <ThemedView style={[styles.totalRow, styles.grandTotal]}>
+                        <ThemedText style={styles.grandTotalLabel}>Amount to Pay</ThemedText>
+                        <ThemedText style={styles.grandTotalValue}>₱{total.toFixed(2)}</ThemedText>
+                    </ThemedView>
+                </ThemedView>
+
+                {/* Action Buttons */}
+                <ThemedView style={styles.actionButtons}>
+                    <TouchableOpacity
+                        style={styles.cancelButton}
+                        onPress={() => {
+                            clearCart();
+                            onClose();
+                        }}
+                        disabled={loading || isProcessingOrder}
+                    >
+                        <ThemedText style={styles.cancelButtonText}>
+                            {isProcessingOrder ? 'Processing...' : 'Cancel & Reset'}
+                        </ThemedText>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        style={[styles.placeOrderButton, (loading || isProcessingOrder) && styles.placeOrderButtonDisabled]}
+                        onPress={placeOrder}
+                        disabled={loading || isProcessingOrder || cart.length === 0 || !orderType}
+                    >
+                        <ThemedText style={styles.placeOrderButtonText}>
+                            {isProcessingOrder ? 'Processing...' : 'Place Order'}
+                        </ThemedText>
+                    </TouchableOpacity>
+                </ThemedView>
+            </ThemedView>
+        </ThemedView>
+    </Modal>
+);
+
 export default function PosScreen() {
     const [searchQuery, setSearchQuery] = useState('');
     const [cart, setCart] = useState<MenuItem[]>([]);
@@ -118,6 +283,7 @@ export default function PosScreen() {
     const [isBluetoothConnected, setIsBluetoothConnected] = useState<boolean>(false);
     const [bluetoothDeviceName, setBluetoothDeviceName] = useState<string>('');
     const [bluetoothConnection, setBluetoothConnection] = useState<BluetoothConnection | null>(null);
+    const [isOrderSummaryVisible, setIsOrderSummaryVisible] = useState(false);
 
     // Initialize Firebase
     const db = getFirestore(app);
@@ -372,7 +538,7 @@ export default function PosScreen() {
         setCart([]);
         setCustomerName('');
         setCupCount(0);
-        setOrderType(null); // RESET ORDER TYPE
+        setOrderType(null);
         setSearchQuery('');
         setSelectedCategory('All');
         setShowReceiptModal(false);
@@ -395,10 +561,10 @@ export default function PosScreen() {
             // Clear cart when screen loses focus
             return () => {
                 console.log('📍 POS Screen unfocused - clearing cart');
-                // Don't reset order type here, only clear cart
                 setCart([]);
                 setCustomerName('');
                 setCupCount(0);
+                setIsOrderSummaryVisible(false);
             };
         }, [])
     );
@@ -530,9 +696,10 @@ export default function PosScreen() {
         setCart([]);
         setCustomerName('');
         setCupCount(0);
-        setOrderType(null); // RESET ORDER TYPE
+        setOrderType(null);
         setShowReceiptModal(false);
         setCurrentReceipt(null);
+        setIsOrderSummaryVisible(false);
 
         // Reload menu items to reflect updated stocks
         loadMenuItems();
@@ -775,6 +942,7 @@ export default function PosScreen() {
             // Show receipt modal AFTER processing is complete
             setCurrentReceipt(receiptData);
             setShowReceiptModal(true);
+            setIsOrderSummaryVisible(false);
 
         } catch (error) {
             console.error('❌ Error placing order:', error);
@@ -795,6 +963,7 @@ export default function PosScreen() {
             };
             setCurrentReceipt(receiptData);
             setShowReceiptModal(true);
+            setIsOrderSummaryVisible(false);
         } finally {
             setLoading(false);
             setIsProcessingOrder(false);
@@ -1180,8 +1349,8 @@ TOTAL: ₱${receipt.total.toFixed(2)}
         }
 
         const items = [];
-        for (let i = 0; i < filteredItems.length; i += 4) {
-            const rowItems = filteredItems.slice(i, i + 4);
+        for (let i = 0; i < filteredItems.length; i += 2) {
+            const rowItems = filteredItems.slice(i, i + 2);
             items.push(
                 <ThemedView key={`row-${i}`} style={styles.menuRow}>
                     {rowItems.map((item, itemIndex) => {
@@ -1279,8 +1448,8 @@ TOTAL: ₱${receipt.total.toFixed(2)}
                             </TouchableOpacity>
                         );
                     })}
-                    {rowItems.length < 4 &&
-                        Array.from({ length: 4 - rowItems.length }).map((_, index) => (
+                    {rowItems.length < 2 &&
+                        Array.from({ length: 2 - rowItems.length }).map((_, index) => (
                             <ThemedView key={`empty-${i}-${index}`} style={styles.emptyCard} />
                         ))
                     }
@@ -1308,134 +1477,20 @@ TOTAL: ₱${receipt.total.toFixed(2)}
 
     return (
         <ThemedView style={styles.container}>
-            <Navbar activeNav="pos" />
-
             <ImageBackground
                 source={require('@/assets/images/kape1.png')}
                 style={styles.backgroundImage}
                 resizeMode="cover"
             >
+                <Navbar 
+                    cartItemCount={cart.length} 
+                    onCartPress={() => setIsOrderSummaryVisible(true)}
+                    activeNav="pos"
+                />
                 <ThemedView style={styles.content}>
-                    <ThemedView style={styles.orderSection}>
-                        <ThemedText style={styles.sectionTitle}>Order Summary</ThemedText>
-
-                        {/* Bluetooth Connection Status */}
-                        {isBluetoothConnected ? (
-                            <ThemedView style={styles.bluetoothStatus}>
-                                <Feather name="bluetooth" size={14} color="#007AFF" />
-                                <ThemedText style={styles.bluetoothStatusText}>
-                                    Connected to {bluetoothDeviceName}
-                                </ThemedText>
-                            </ThemedView>
-                        ) : (
-                            <ThemedView style={styles.bluetoothStatusOffline}>
-                                <Feather name="bluetooth" size={14} color="#DC2626" />
-                                <ThemedText style={styles.bluetoothStatusTextOffline}>
-                                    Bluetooth printer not connected
-                                </ThemedText>
-                            </ThemedView>
-                        )}
-
-                        <ThemedView style={styles.customerInputContainer}>
-                            <ThemedText style={styles.inputLabel}>Customer Name:</ThemedText>
-                            <TextInput
-                                style={styles.customerInput}
-                                value={customerName}
-                                onChangeText={setCustomerName}
-                                placeholder="Enter customer name"
-                                placeholderTextColor="#9CA3AF"
-                            />
-                        </ThemedView>
-
-                        <ThemedView style={styles.tableHeader}>
-                            <ThemedText style={[styles.headerText, styles.itemHeader]}>Item</ThemedText>
-                            <ThemedText style={[styles.headerText, styles.priceHeader]}>Price</ThemedText>
-                            <ThemedText style={[styles.headerText, styles.qtyHeader]}>Qnt.</ThemedText>
-                            <ThemedText style={[styles.headerText, styles.totalHeader]}>Total (₱)</ThemedText>
-                        </ThemedView>
-
-                        <ScrollView style={styles.orderList}>
-                            {cart.length === 0 ? (
-                                <ThemedView style={styles.emptyCart}>
-                                    <Feather name="shopping-cart" size={36} color="#D4A574" />
-                                    <ThemedText style={styles.emptyCartText}>No items in cart</ThemedText>
-                                    <ThemedText style={styles.emptyCartSubText}>
-                                        {orderType ? 'Tap on menu items to add them' : 'Select order type first'}
-                                    </ThemedText>
-                                </ThemedView>
-                            ) : (
-                                cart.map((item, index) => (
-                                    <ThemedView key={`${item.id}-${index}`} style={styles.orderRow}>
-                                        <ThemedText style={[styles.cellText, styles.itemCell]} numberOfLines={1}>
-                                            {item.name} {item.isOffline && '📱'}
-                                        </ThemedText>
-                                        <ThemedText style={[styles.cellText, styles.priceCell]}>₱{item.price.toFixed(2)}</ThemedText>
-                                        <ThemedView style={styles.qtyCell}>
-                                            <TouchableOpacity
-                                                style={styles.qtyButton}
-                                                onPress={() => updateQuantity(item.id, item.quantity - 1)}
-                                            >
-                                                <Feather name="minus" size={12} color="#874E3B" />
-                                            </TouchableOpacity>
-                                            <ThemedText style={styles.qtyText}>{item.quantity}</ThemedText>
-                                            <TouchableOpacity
-                                                style={styles.qtyButton}
-                                                onPress={() => updateQuantity(item.id, item.quantity + 1)}
-                                            >
-                                                <Feather name="plus" size={12} color="#874E3B" />
-                                            </TouchableOpacity>
-                                        </ThemedView>
-                                        <ThemedText style={[styles.cellText, styles.totalCell]}>
-                                            ₱{(item.price * item.quantity).toFixed(2)}
-                                        </ThemedText>
-                                    </ThemedView>
-                                ))
-                            )}
-                        </ScrollView>
-
-                        <ThemedView style={styles.totalsSection}>
-                            <ThemedView style={styles.totalRow}>
-                                <ThemedText style={styles.totalLabel}>Sub total</ThemedText>
-                                <ThemedText style={styles.totalValue}>₱{subtotal.toFixed(2)}</ThemedText>
-                            </ThemedView>
-                            <ThemedView style={styles.totalRow}>
-                                <ThemedText style={styles.totalLabel}>Other Charge</ThemedText>
-                                <ThemedText style={styles.totalValue}>₱0.00</ThemedText>
-                            </ThemedView>
-                            <ThemedView style={[styles.totalRow, styles.grandTotal]}>
-                                <ThemedText style={styles.grandTotalLabel}>Amount to Pay</ThemedText>
-                                <ThemedText style={styles.grandTotalValue}>₱{total.toFixed(2)}</ThemedText>
-                            </ThemedView>
-                        </ThemedView>
-
-                        <ThemedView style={styles.actionButtons}>
-                            <TouchableOpacity
-                                style={styles.cancelButton}
-                                onPress={() => {
-                                    clearCart();
-                                    setOrderType(null); // RESET ORDER TYPE ON CANCEL
-                                }}
-                                disabled={loading || isProcessingOrder}
-                            >
-                                <ThemedText style={styles.cancelButtonText}>
-                                    {isProcessingOrder ? 'Processing...' : 'Cancel & Reset'}
-                                </ThemedText>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                style={[styles.placeOrderButton, (loading || isProcessingOrder) && styles.placeOrderButtonDisabled]}
-                                onPress={placeOrder}
-                                disabled={loading || isProcessingOrder || cart.length === 0 || !orderType}
-                            >
-                                <ThemedText style={styles.placeOrderButtonText}>
-                                    {isProcessingOrder ? 'Processing...' : 'Place Order'}
-                                </ThemedText>
-                            </TouchableOpacity>
-                        </ThemedView>
-                    </ThemedView>
-
-                    <ThemedView style={styles.menuSection}>
-                        {/* ORDER TYPE SELECTION - SHOW FIRST */}
-                        {!orderType && (
+                    {/* ORDER TYPE SELECTION - ONLY SHOW WHEN NO ORDER TYPE SELECTED */}
+                    {!orderType && (
+                        <ThemedView style={styles.menuSection}>
                             <ThemedView style={styles.orderTypeContainer}>
                                 <ThemedText style={styles.orderTypeTitle}>
                                     Select Order Type</ThemedText>
@@ -1461,145 +1516,163 @@ TOTAL: ₱${receipt.total.toFixed(2)}
                                     </TouchableOpacity>
                                 </ThemedView>
                             </ThemedView>
-                        )}
+                        </ThemedView>
+                    )}
 
-                        {/* MENU HEADER - SHOW ONLY AFTER ORDER TYPE SELECTION */}
-                        {orderType && (
-                            <>
-                                <ThemedView style={styles.menuHeader}>
-                                    {/* Order Type Indicator */}
-                                    <ThemedView style={styles.orderTypeIndicator}>
-                                        <ThemedText style={styles.orderTypeLabel}>
-                                            Order Type:
-                                        </ThemedText>
-                                        <ThemedView style={[
-                                            styles.orderTypeBadge,
-                                            orderType === 'dine-in' ? styles.dineInBadge : styles.takeOutBadge
-                                        ]}>
-                                            <Feather
-                                                name={orderType === 'dine-in' ? "coffee" : "shopping-bag"}
-                                                size={14}
-                                                color="#FFFEEA"
-                                            />
-                                            <ThemedText style={styles.orderTypeBadgeText}>
-                                                {orderType === 'dine-in' ? 'DINE IN' : 'TAKE OUT'}
-                                            </ThemedText>
-                                            <TouchableOpacity
-                                                onPress={() => {
-                                                    setOrderType(null);
-                                                    clearCart();
-                                                }}
-                                                style={styles.changeOrderTypeButton}
-                                            >
-                                                <Feather name="edit" size={12} color="#FFFEEA" />
-                                            </TouchableOpacity>
-                                        </ThemedView>
-                                    </ThemedView>
-
-                                    <ThemedView style={styles.searchContainer}>
-                                        <Feather name="search" size={18} color="#874E3B" style={styles.searchIcon} />
-                                        <TextInput
-                                            style={styles.searchInput}
-                                            placeholder="Search Items"
-                                            value={searchQuery}
-                                            onChangeText={setSearchQuery}
+                    {/* MENU HEADER AND CONTENT - ONLY SHOW WHEN ORDER TYPE IS SELECTED */}
+                    {orderType && (
+                        <ThemedView style={styles.menuSection2}>
+                            <ThemedView style={styles.menuHeader}>
+                                {/* Order Type Indicator */}
+                                <ThemedView style={styles.orderTypeIndicator}>
+                                    <ThemedText style={styles.orderTypeLabel}>
+                                        Order Type:
+                                    </ThemedText>
+                                    <ThemedView style={[
+                                        styles.orderTypeBadge,
+                                        orderType === 'dine-in' ? styles.dineInBadge : styles.takeOutBadge
+                                    ]}>
+                                        <Feather
+                                            name={orderType === 'dine-in' ? "coffee" : "shopping-bag"}
+                                            size={14}
+                                            color="#FFFEEA"
                                         />
+                                        <ThemedText style={styles.orderTypeBadgeText}>
+                                            {orderType === 'dine-in' ? 'DINE IN' : 'TAKE OUT'}
+                                        </ThemedText>
                                         <TouchableOpacity
-                                            style={styles.reloadButton}
                                             onPress={() => {
-                                                loadMenuItems();
-                                                loadCategories();
+                                                setOrderType(null);
+                                                clearCart();
                                             }}
+                                            style={styles.changeOrderTypeButton}
                                         >
-                                            <Feather name="refresh-cw" size={18} color="#874E3B" />
+                                            <Feather name="edit" size={12} color="#FFFEEA" />
                                         </TouchableOpacity>
                                     </ThemedView>
-
-                                    {/* Simple Cup Counter - Only show for take-out orders */}
-                                    {orderType === 'take-out' && cupCount > 0 && (
-                                        <ThemedView style={styles.cupCounterContainer}>
-                                            <Feather name="coffee" size={16} color="#874E3B" />
-                                            <ThemedText style={styles.cupCounterLabel}>
-                                                Total Cups: {cupCount}
-                                            </ThemedText>
-                                        </ThemedView>
-                                    )}
                                 </ThemedView>
 
-                                <ScrollView
-                                    horizontal
-                                    showsHorizontalScrollIndicator={false}
-                                    style={styles.categoriesContainer}
-                                    contentContainerStyle={styles.categoriesContent}
-                                >
-                                    {categories.map((category, index) => (
-                                        <TouchableOpacity
-                                            key={`${category.id}-${index}`}
-                                            style={[
-                                                styles.categoryCard,
-                                                selectedCategory === category.name && styles.categoryCardActive
-                                            ]}
-                                            onPress={() => setSelectedCategory(category.name)}
-                                        >
-                                            {category.id !== 'all' && (
-                                                <ThemedView style={[
-                                                    styles.categoryModeIndicator,
-                                                    category.isOffline ? styles.sentMode : styles.deliveredMode
-                                                ]}>
+                                <ThemedView style={styles.searchContainer}>
+                                    <Feather name="search" size={18} color="#874E3B" style={styles.searchIcon} />
+                                    <TextInput
+                                        style={styles.searchInput}
+                                        placeholder="Search Items"
+                                        value={searchQuery}
+                                        onChangeText={setSearchQuery}
+                                    />
+                                    <TouchableOpacity
+                                        style={styles.reloadButton}
+                                        onPress={() => {
+                                            loadMenuItems();
+                                            loadCategories();
+                                        }}
+                                    >
+                                        <Feather name="refresh-cw" size={18} color="#874E3B" />
+                                    </TouchableOpacity>
+                                </ThemedView>
+
+                                {/* Simple Cup Counter - Only show for take-out orders */}
+                                {orderType === 'take-out' && cupCount > 0 && (
+                                    <ThemedView style={styles.cupCounterContainer}>
+                                        <Feather name="coffee" size={16} color="#874E3B" />
+                                        <ThemedText style={styles.cupCounterLabel}>
+                                            Total Cups: {cupCount}
+                                        </ThemedText>
+                                    </ThemedView>
+                                )}
+                            </ThemedView>
+
+                            <ScrollView
+                                horizontal
+                                showsHorizontalScrollIndicator={false}
+                                style={styles.categoriesContainer}
+                                contentContainerStyle={styles.categoriesContent}
+                            >
+                                {categories.map((category, index) => (
+                                    <TouchableOpacity
+                                        key={`${category.id}-${index}`}
+                                        style={[
+                                            styles.categoryCard,
+                                            selectedCategory === category.name && styles.categoryCardActive
+                                        ]}
+                                        onPress={() => setSelectedCategory(category.name)}
+                                    >
+                                        {category.id !== 'all' && (
+                                            <ThemedView style={[
+                                                styles.categoryModeIndicator,
+                                                category.isOffline ? styles.sentMode : styles.deliveredMode
+                                            ]}>
+                                                <Feather
+                                                    name="check"
+                                                    size={8}
+                                                    color={category.isOffline ? "#666" : "#FFF"}
+                                                />
+                                                {!category.isOffline && (
                                                     <Feather
                                                         name="check"
                                                         size={8}
-                                                        color={category.isOffline ? "#666" : "#FFF"}
+                                                        color="#FFF"
+                                                        style={styles.deliveredCheck}
                                                     />
-                                                    {!category.isOffline && (
-                                                        <Feather
-                                                            name="check"
-                                                            size={8}
-                                                            color="#FFF"
-                                                            style={styles.deliveredCheck}
-                                                        />
-                                                    )}
-                                                </ThemedView>
-                                            )}
+                                                )}
+                                            </ThemedView>
+                                        )}
 
-                                            <Feather
-                                                name={(category.icon || 'folder') as any}
-                                                size={28}
-                                                color={selectedCategory === category.name ? '#FFFEEA' : '#874E3B'}
-                                                style={styles.categoryIcon}
-                                            />
+                                        <Feather
+                                            name={(category.icon || 'folder') as any}
+                                            size={28}
+                                            color={selectedCategory === category.name ? '#FFFEEA' : '#874E3B'}
+                                            style={styles.categoryIcon}
+                                        />
 
-                                            <Text
-                                                style={[
-                                                    styles.categoryName,
-                                                    selectedCategory === category.name && styles.categoryNameActive
-                                                ]}
-                                                numberOfLines={2}
-                                                ellipsizeMode="tail"
-                                            >
-                                                {category.name}
+                                        <Text
+                                            style={[
+                                                styles.categoryName,
+                                                selectedCategory === category.name && styles.categoryNameActive
+                                            ]}
+                                            numberOfLines={2}
+                                            ellipsizeMode="tail"
+                                        >
+                                            {category.name}
+                                        </Text>
+
+                                        {category.items_count !== undefined && category.items_count > 0 && category.id !== 'all' && (
+                                            <Text style={[
+                                                styles.categoryCount,
+                                                selectedCategory === category.name && styles.categoryCountActive
+                                            ]}>
+                                                {category.items_count}
                                             </Text>
+                                        )}
+                                    </TouchableOpacity>
+                                ))}
+                            </ScrollView>
 
-                                            {category.items_count !== undefined && category.items_count > 0 && category.id !== 'all' && (
-                                                <Text style={[
-                                                    styles.categoryCount,
-                                                    selectedCategory === category.name && styles.categoryCountActive
-                                                ]}>
-                                                    {category.items_count}
-                                                </Text>
-                                            )}
-                                        </TouchableOpacity>
-                                    ))}
-                                </ScrollView>
-
-                                <ScrollView style={styles.menuList}>
-                                    {renderMenuItems()}
-                                </ScrollView>
-                            </>
-                        )}
-                    </ThemedView>
+                            <ScrollView style={styles.menuList}>
+                                {renderMenuItems()}
+                            </ScrollView>
+                        </ThemedView>
+                    )}
                 </ThemedView>
             </ImageBackground>
+
+            {/* Order Summary Modal - Using extracted component */}
+            <OrderSummaryModal 
+                visible={isOrderSummaryVisible}
+                onClose={() => setIsOrderSummaryVisible(false)}
+                customerName={customerName}
+                setCustomerName={setCustomerName}
+                cart={cart}
+                subtotal={subtotal}
+                total={total}
+                orderType={orderType}
+                updateQuantity={updateQuantity}
+                clearCart={clearCart}
+                placeOrder={placeOrder}
+                loading={loading}
+                isProcessingOrder={isProcessingOrder}
+                isBluetoothConnected={isBluetoothConnected}
+            />
 
             {/* PROCESSING MODAL */}
             {isProcessingOrder && (
@@ -1747,7 +1820,6 @@ TOTAL: ₱${receipt.total.toFixed(2)}
     );
 }
 
-// ... (styles remain the same as previous version)
 const styles = StyleSheet.create({
     container: {
         flex: 1,
@@ -1758,18 +1830,18 @@ const styles = StyleSheet.create({
     },
     categoryModeIndicator: {
         position: 'absolute',
-        top: 2, // Gi-adjust gikan sa 4
-        right: 2, // Gi-adjust gikan sa 4
-        width: 14, // Gi-reduce gamay
-        height: 14, // Gi-reduce gamay
+        top: 2,
+        right: 2,
+        width: 14,
+        height: 14,
         borderRadius: 7,
         justifyContent: 'center',
         alignItems: 'center',
         zIndex: 10,
     },
     categoryCount: {
-        fontSize: 8, // Gi-gamay gamay
-        color: '#874E3B',
+        fontSize: 8,
+        color: '#854442',
         marginTop: 1,
         fontWeight: 'bold',
     },
@@ -1778,53 +1850,55 @@ const styles = StyleSheet.create({
     },
     content: {
         flex: 1,
-        flexDirection: 'row',
         padding: 16,
-        gap: 16,
         backgroundColor: 'transparent',
     },
-    orderSection: {
-        width: '35%',
-        backgroundColor: "#fffecaF2",
-        borderRadius: 12,
-        padding: 12,
-        borderWidth: 1,
-        borderColor: '#D4A574',
-    },
     menuSection: {
-        flex: 1,
+        height: 500,
+        alignSelf: 'center',
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
         borderRadius: 12,
         padding: 16,
-        backgroundColor: '#fffecaF2',
+        marginTop: 100,
+        backgroundColor: 'rgba(223, 204, 175, 0.7)',
+    },
+    menuSection2: {
+        flex: 1,
+        borderWidth: 1,
+        borderColor: '#854442',
+        borderRadius: 12,
+        padding: 16,
+        backgroundColor: 'rgba(223, 204, 175, 0.7)',
     },
     menuHeader: {
         marginBottom: 12,
-        backgroundColor: "#fffecaF2"
+        backgroundColor: 'transparent',
     },
     sectionTitle: {
         fontSize: 18,
         marginBottom: 5,
         textAlign: 'center',
         fontFamily: 'LobsterTwoItalic',
-        color: '#874E3B',
+        color: '#854442',
     },
     tableHeader: {
         flexDirection: 'row',
-        borderBottomWidth: 2,
-        borderBottomColor: '#874E3B',
+        borderBottomWidth: 5,
+        borderBottomColor: '#854442',
         paddingBottom: 6,
         marginBottom: 6,
+        borderRadius: 10,
         backgroundColor: "rgba(255, 254, 234, 0.95)",
     },
     headerText: {
         fontWeight: 'bold',
-        color: '#874E3B',
+        color: '#854442',
         fontSize: 17,
     },
     itemHeader: {
         flex: 2.5,
+        marginLeft: 5,
         textAlign: 'left',
     },
     priceHeader: {
@@ -1837,19 +1911,83 @@ const styles = StyleSheet.create({
     },
     totalHeader: {
         flex: 1.5,
+        marginRight: 5,
         textAlign: 'right',
     },
-    // Updated receipt styles for 2-inch width
     modalOverlay: {
         position: 'absolute',
         top: 0,
         left: 0,
         right: 0,
         bottom: 0,
+        width: '100%',
+        height: '100%',
         backgroundColor: 'rgba(0, 0, 0, 0.5)',
         justifyContent: 'center',
         alignItems: 'center',
         zIndex: 1000,
+    },
+    orderListExpanded: {
+        flex: 1,
+        marginBottom: 12,
+        maxHeight: 400,
+        minHeight: 200,
+    },
+    emptyCartExpanded: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        paddingVertical: 60,
+        minHeight: 250,
+        borderWidth: 1,
+        borderColor: '#854442',
+        borderRadius: 12,
+        backgroundColor: "rgba(255, 254, 234, 0.95)",
+    },
+    orderSummaryModal: {
+        width: '90%',
+        height: '69%',
+        maxWidth: 500,
+        maxHeight: '75%',
+        backgroundColor: '#DFCCAF',
+        borderRadius: 12,
+        padding: 16,
+        borderWidth: 2,
+        borderColor: '#854442',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3,
+        shadowRadius: 8,
+        elevation: 10,
+    },
+    modalTitleContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        backgroundColor: 'transparent'
+    },
+    headerBluetoothIcon: {
+        marginLeft: 4,
+        backgroundColor: 'transparent'
+    },
+    modalHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 16,
+        paddingBottom: 12,
+        borderBottomWidth: 2,
+        backgroundColor: 'transparent',
+        borderBottomColor: '#D4A574',
+    },
+    modalTitle: {
+        fontSize: 20,
+        fontFamily: 'LobsterTwoItalic',
+        color: '#854442',
+        fontWeight: 'bold',
+    },
+    closeModalButton: {
+        padding: 4,
     },
     receiptModal: {
         width: 250,
@@ -1861,7 +1999,7 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.25,
         shadowRadius: 4,
         elevation: 5,
-        maxHeight: '90%', // Changed from 80% to 90% to give more space
+        maxHeight: '90%',
     },
     receiptHeader: {
         alignItems: 'center',
@@ -1915,6 +2053,7 @@ const styles = StyleSheet.create({
         paddingBottom: 1,
         borderBottomWidth: 1,
         borderBottomColor: '#CCCCCC',
+        
     },
     itemHeaderText: {
         fontSize: 8,
@@ -1944,13 +2083,15 @@ const styles = StyleSheet.create({
     },
     receiptItemText: {
         fontSize: 8,
-        color: '#000000',
+        color: '#874E3B',
     },
     itemName: {
         flex: 3,
         textAlign: 'left',
+        fontSize: 15,
         color: '#F5E6D3',
         fontWeight: '500',
+        marginBottom: 2,
         fontFamily: 'LobsterTwoRegular',
         textShadowColor: 'rgba(0, 0, 0, 0.9)',
         textShadowOffset: { width: 2, height: 2 },
@@ -1964,8 +2105,10 @@ const styles = StyleSheet.create({
     itemPrice: {
         flex: 2,
         textAlign: 'right',
+        fontSize: 15,
         color: '#F5E6D3',
         fontWeight: '500',
+        marginBottom: 2,
         fontFamily: 'LobsterTwoRegular',
         textShadowColor: 'rgba(0, 0, 0, 0.9)',
         textShadowOffset: { width: 2, height: 2 },
@@ -1984,20 +2127,21 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         justifyContent: 'space-between',
         marginBottom: 1,
+        backgroundColor: '#DFCCAF',
     },
     totalLabel: {
         fontSize: 15,
-        color: '#000000',
+        color: '#874E3B',
         fontWeight: '500',
     },
     totalValue: {
         fontSize: 15,
-        color: '#000000',
+        color: '#874E3B',
     },
     grandTotalValue: {
-        fontSize: 17,
+        fontSize: 25,
         fontWeight: 'bold',
-        color: '#000000',
+        color: '#874E3B',
     },
     cupsUsedSection: {
         alignItems: 'center',
@@ -2050,6 +2194,7 @@ const styles = StyleSheet.create({
     orderList: {
         flex: 1,
         marginBottom: 12,
+        maxHeight: 300,
     },
     emptyCart: {
         flex: 1,
@@ -2057,7 +2202,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         paddingVertical: 43,
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
         borderRadius: 12,
         backgroundColor: "rgba(255, 254, 234, 0.95)",
     },
@@ -2081,6 +2226,7 @@ const styles = StyleSheet.create({
         borderBottomWidth: 1,
         borderBottomColor: '#E8D8C8',
         backgroundColor: "rgba(255, 254, 250, 0.95)",
+        borderRadius: 10
     },
     cellText: {
         fontSize: 15,
@@ -2089,6 +2235,7 @@ const styles = StyleSheet.create({
     itemCell: {
         flex: 2.5,
         textAlign: 'left',
+        marginLeft: 3
     },
     priceCell: {
         flex: 1.5,
@@ -2110,7 +2257,7 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
     },
     qtyText: {
         fontSize: 12,
@@ -2123,17 +2270,20 @@ const styles = StyleSheet.create({
         flex: 1.5,
         textAlign: 'right',
         fontWeight: 'bold',
+        marginRight: 4,
     },
     totalsSection: {
         borderTopWidth: 2,
         borderTopColor: '#874E3B',
         marginBottom: 12,
+        backgroundColor: '#874E3B',
     },
     grandTotal: {
         borderTopWidth: 1,
-        borderTopColor: '#D4A574',
+        borderTopColor: '#DFCCAF',
         paddingTop: 6,
         marginTop: 3,
+        backgroundColor: '#DFCCAF',
     },
     grandTotalLabel: {
         fontSize: 18,
@@ -2143,7 +2293,7 @@ const styles = StyleSheet.create({
     actionButtons: {
         flexDirection: 'row',
         gap: 8,
-        backgroundColor: "#fffecaF2",
+        backgroundColor: 'transparent',
     },
     cancelButton: {
         flex: 1,
@@ -2152,7 +2302,7 @@ const styles = StyleSheet.create({
         borderRadius: 6,
         alignItems: 'center',
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
     },
     cancelButtonText: {
         color: '#874E3B',
@@ -2161,7 +2311,7 @@ const styles = StyleSheet.create({
     },
     placeOrderButton: {
         flex: 1,
-        backgroundColor: '#874E3B',
+        backgroundColor: '#854442',
         paddingVertical: 10,
         borderRadius: 6,
         alignItems: 'center',
@@ -2179,7 +2329,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         backgroundColor: 'rgba(255, 254, 234, 0.95)',
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
         borderRadius: 8,
         paddingHorizontal: 12,
         paddingVertical: 5,
@@ -2201,14 +2351,13 @@ const styles = StyleSheet.create({
         paddingVertical: 2,
         gap: 12,
     },
-    // Extra compact version
     categoryCard: {
         width: 75,
-        height: 60, // Gi-reduce pa gamay
+        height: 60,
         backgroundColor: '#F5E6D3',
         borderRadius: 10,
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
         alignItems: 'center',
         justifyContent: 'center',
         padding: 4,
@@ -2219,24 +2368,24 @@ const styles = StyleSheet.create({
         elevation: 2,
     },
     categoryCardActive: {
-        backgroundColor: '#874E3B',
-        borderColor: '#874E3B',
-        shadowColor: '#874E3B',
+        backgroundColor: '#854442',
+        borderColor: '#854442',
+        shadowColor: '#854442',
         shadowOffset: { width: 0, height: 3 },
         shadowOpacity: 0.3,
         shadowRadius: 5,
         elevation: 5,
     },
     categoryIcon: {
-        marginBottom: 4, // Gi-reduce gikan sa 6
+        marginBottom: 4,
     },
     categoryName: {
-        fontSize: 10, // Gi-gamay gamay para masud sa 3 words
+        fontSize: 10,
         fontWeight: 'bold',
         color: '#874E3B',
         textAlign: 'center',
         marginTop: 2,
-        lineHeight: 12, // Gi-set ang line height para consistent
+        lineHeight: 12,
     },
     categoryNameActive: {
         color: '#FFFEEA',
@@ -2285,10 +2434,10 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         justifyContent: 'space-between',
         marginBottom: 8,
-        backgroundColor: "#fffecaF2",
+        backgroundColor: 'transparent',
     },
     menuCard: {
-        width: '23%',
+        width: '48%',
         aspectRatio: 1,
         backgroundColor: 'transparent',
         borderRadius: 10,
@@ -2322,7 +2471,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         backgroundColor: 'rgba(255, 254, 234, 0.95)',
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
         borderRadius: 8,
         paddingHorizontal: 12,
         paddingVertical: 8,
@@ -2348,7 +2497,7 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
     },
     cupCounterValue: {
         fontSize: 16,
@@ -2390,7 +2539,7 @@ const styles = StyleSheet.create({
         borderRadius: 12,
         padding: 20,
         borderWidth: 2,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
         width: '80%',
     },
     itemImage: {
@@ -2432,7 +2581,7 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
     },
     cardContent: {
         flex: 1,
@@ -2445,7 +2594,6 @@ const styles = StyleSheet.create({
         zIndex: 1,
         backgroundColor: 'transparent',
     },
-
     itemCategory: {
         fontSize: 15,
         color: '#F5E6D3',
@@ -2489,7 +2637,6 @@ const styles = StyleSheet.create({
         alignItems: 'flex-end',
         backgroundColor: 'transparent'
     },
-
     addButton: {
         width: 26,
         height: 26,
@@ -2498,7 +2645,7 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
         borderWidth: 1,
-        borderColor: '#874E3B',
+        borderColor: '#854442',
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.2,
@@ -2535,7 +2682,7 @@ const styles = StyleSheet.create({
         fontWeight: 'bold',
     },
     receiptItemsScroll: {
-        maxHeight: 200, // Adjust this value based on how much space you want for items
+        maxHeight: 200,
         marginBottom: 6,
     },
     cancelCupButton: {
@@ -2544,7 +2691,7 @@ const styles = StyleSheet.create({
         paddingVertical: 6,
         borderRadius: 6,
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
         marginLeft: 4,
     },
     cancelCupButtonText: {
@@ -2599,26 +2746,25 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         marginBottom: 12,
-        backgroundColor: "#fffecaF2",
+        backgroundColor: "transparent",
     },
     inputLabel: {
         fontSize: 14,
-        color: '#5A3921',
-        fontWeight: '500',
+        color: '#854442',
+        fontWeight: '700',
         width: 115
     },
     customerInput: {
         flex: 1,
         backgroundColor: 'rgba(255, 254, 234, 0.95)',
         borderWidth: 2,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
         borderRadius: 8,
         paddingHorizontal: 12,
         paddingVertical: 8,
         fontSize: 16,
-        color: '#5A3921',
+        color: '#854442',
     },
-
     receiptOrderType: {
         fontSize: 16,
         fontWeight: 'bold',
@@ -2629,22 +2775,18 @@ const styles = StyleSheet.create({
         backgroundColor: '#F5E6D3',
         borderRadius: 8,
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
     },
-
     receiptItemName: {
         fontSize: 12,
         color: '#5A3921',
         flex: 2,
     },
-
-
     totalAmount: {
         fontSize: 18,
         fontWeight: 'bold',
         color: '#874E3B',
     },
-
     processingOverlay: {
         position: 'absolute',
         top: 0,
@@ -2661,7 +2803,7 @@ const styles = StyleSheet.create({
         backgroundColor: '#FFFEEA',
         borderRadius: 12,
         borderWidth: 2,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
         padding: 24,
         alignItems: 'center',
         shadowColor: '#000',
@@ -2690,21 +2832,25 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
         paddingVertical: 40,
-        backgroundColor: '#fffecaF2',
+        backgroundColor: 'transparent',
     },
     orderTypeTitle: {
-        fontSize: 24,
+        fontSize: 32,
         fontFamily: 'LobsterTwoItalic',
         color: '#874E3B',
-        marginBottom: 30,
+        marginBottom: 40,
         textAlign: 'center',
+        letterSpacing: 2,
+        textShadowColor: 'rgba(0, 0, 0, 0.1)',
+        textShadowOffset: { width: 2, height: 2 },
+        textShadowRadius: 4,
     },
     orderTypeButtons: {
         flexDirection: 'row',
         gap: 20,
         justifyContent: 'center',
         alignItems: 'center',
-        backgroundColor: '#fffecaF2',
+        backgroundColor: 'transparent',
     },
     orderTypeButton: {
         width: 140,
@@ -2720,10 +2866,10 @@ const styles = StyleSheet.create({
         elevation: 8,
     },
     dineInButton: {
-        backgroundColor: '#874E3B',
+        backgroundColor: '#854442',
     },
     takeOutButton: {
-        backgroundColor: '#D4A574',
+        backgroundColor: '#6F4436',
     },
     orderTypeButtonText: {
         color: '#FFFEEA',
@@ -2741,11 +2887,11 @@ const styles = StyleSheet.create({
         padding: 5,
         borderRadius: 8,
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
     },
     orderTypeLabel: {
         fontSize: 16,
-        color: '#874E3B',
+        color: '#854442',
         fontWeight: '500',
     },
     orderTypeBadge: {
@@ -2757,10 +2903,10 @@ const styles = StyleSheet.create({
         gap: 6,
     },
     dineInBadge: {
-        backgroundColor: '#874E3B',
+        backgroundColor: '#854442',
     },
     takeOutBadge: {
-        backgroundColor: '#D4A574',
+        backgroundColor: '#854442',
     },
     orderTypeBadgeText: {
         color: '#FFFEEA',

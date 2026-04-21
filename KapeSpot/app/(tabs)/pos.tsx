@@ -31,6 +31,7 @@ import {
     where
 } from 'firebase/firestore';
 import { app } from '@/lib/firebase-config';
+import BleManager from 'react-native-ble-manager';
 
 interface MenuItem {
     id: string;
@@ -69,6 +70,7 @@ interface ReceiptData {
     firebaseId?: string;
     cupsUsed?: number;
     orderType: 'dine-in' | 'take-out';
+    notes?: string; // ADDED: notes/comment field
 }
 
 interface CupItem {
@@ -116,7 +118,9 @@ const OrderSummaryModal = ({
     placeOrder, 
     loading, 
     isProcessingOrder,
-    isBluetoothConnected 
+    isBluetoothConnected,
+    notes,           // ADDED: notes prop
+    setNotes         // ADDED: setNotes prop
 }: { 
     visible: boolean;
     onClose: () => void;
@@ -132,6 +136,8 @@ const OrderSummaryModal = ({
     loading: boolean;
     isProcessingOrder: boolean;
     isBluetoothConnected: boolean;
+    notes: string;           // ADDED: notes type
+    setNotes: (notes: string) => void;  // ADDED: setNotes type
 }) => (
     <Modal
         visible={visible}
@@ -168,7 +174,22 @@ const OrderSummaryModal = ({
                         value={customerName}
                         onChangeText={setCustomerName}
                         placeholder="Enter customer name"
-                        placeholderTextColor="#9CA3AF"
+                        placeholderTextColor="#854442"
+                    />
+                </ThemedView>
+
+                {/* ADDED: Notes/Comment Input */}
+                <ThemedView style={styles.notesInputContainer}>
+                    <ThemedText style={styles.inputLabel}>Comment:</ThemedText>
+                    <TextInput
+                        style={styles.notesInput}
+                        value={notes}
+                        onChangeText={setNotes}
+                        placeholder="Add special instructions or notes..."
+                        placeholderTextColor="#854442"
+                        multiline={true}
+                        numberOfLines={3}
+                        textAlignVertical="top"
                     />
                 </ThemedView>
 
@@ -284,6 +305,7 @@ export default function PosScreen() {
     const [bluetoothDeviceName, setBluetoothDeviceName] = useState<string>('');
     const [bluetoothConnection, setBluetoothConnection] = useState<BluetoothConnection | null>(null);
     const [isOrderSummaryVisible, setIsOrderSummaryVisible] = useState(false);
+    const [notes, setNotes] = useState<string>(''); // ADDED: notes state
 
     // Initialize Firebase
     const db = getFirestore(app);
@@ -537,6 +559,7 @@ export default function PosScreen() {
         console.log('🔄 Resetting POS state...');
         setCart([]);
         setCustomerName('');
+        setNotes(''); // ADDED: reset notes
         setCupCount(0);
         setOrderType(null);
         setSearchQuery('');
@@ -563,6 +586,7 @@ export default function PosScreen() {
                 console.log('📍 POS Screen unfocused - clearing cart');
                 setCart([]);
                 setCustomerName('');
+                setNotes(''); // ADDED: reset notes on unfocus
                 setCupCount(0);
                 setIsOrderSummaryVisible(false);
             };
@@ -687,6 +711,7 @@ export default function PosScreen() {
         });
         setCart([]);
         setCustomerName('');
+        setNotes(''); // ADDED: clear notes
         setCupCount(0);
     };
 
@@ -695,6 +720,7 @@ export default function PosScreen() {
         console.log('🔄 Resetting after order completion...');
         setCart([]);
         setCustomerName('');
+        setNotes(''); // ADDED: reset notes after order
         setCupCount(0);
         setOrderType(null);
         setShowReceiptModal(false);
@@ -837,13 +863,15 @@ export default function PosScreen() {
                 timestamp: new Date().toISOString(),
                 status: 'unpaid',
                 cupsUsed: orderType === 'take-out' ? cupCount : 0,
-                orderType: orderType
+                orderType: orderType,
+                notes: notes.trim() || '' // ADDED: include notes in receipt data
             };
 
             console.log('🔄 [FIREBASE ORDER] Starting order process...');
             console.log('🌐 Current Mode:', connectionMode === 'offline' ? 'OFFLINE' : 'ONLINE');
             console.log('🥤 Total cups used in this order:', cupCount);
             console.log('📝 Order Type:', orderType);
+            console.log('📝 Order Notes:', notes); // ADDED: log notes
 
             // STEP 1: ALWAYS SAVE TO LOCAL STORAGE FIRST
             console.log('💾 Step 1: Saving to LOCAL storage...');
@@ -865,7 +893,7 @@ export default function PosScreen() {
                 console.log('🔥 Step 3: Attempting to save to FIREBASE...');
 
                 try {
-                    // Save order to Firebase
+                    // Save order to Firebase with notes field
                     const orderData = {
                         orderId: receiptData.orderId,
                         customerName: receiptData.customerName,
@@ -882,7 +910,8 @@ export default function PosScreen() {
                         timestamp: receiptData.timestamp,
                         created_at: new Date().toISOString(),
                         cups_used: cupCount,
-                        order_type: orderType
+                        order_type: orderType,
+                        notes: receiptData.notes || '' // ADDED: save notes to Firestore
                     };
 
                     const docRef = await addDoc(collection(db, 'orders'), orderData);
@@ -891,7 +920,8 @@ export default function PosScreen() {
                     console.log('✅ Step 3 COMPLETE: Saved to FIREBASE successfully:', {
                         firebaseId: firebaseId,
                         orderId: receiptData.orderId,
-                        orderType: orderType
+                        orderType: orderType,
+                        notes: receiptData.notes // ADDED: confirm notes saved
                     });
 
                     // Update receipt data with Firebase ID
@@ -959,7 +989,8 @@ export default function PosScreen() {
                 total: total,
                 timestamp: new Date().toLocaleString(),
                 status: 'unpaid',
-                orderType: orderType!
+                orderType: orderType!,
+                notes: notes.trim() || '' // ADDED: include notes in fallback receipt
             };
             setCurrentReceipt(receiptData);
             setShowReceiptModal(true);
@@ -1099,7 +1130,7 @@ export default function PosScreen() {
         return !!item.cupName && item.cupName.trim() !== '' && item.stocks > 0;
     };
 
-    // Function to generate compact receipt content
+    // Function to generate compact receipt content - UPDATED to include notes
     const generateCompactReceiptContent = (receipt: ReceiptData): string => {
         const currentDate = new Date().toLocaleDateString();
         const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -1113,7 +1144,14 @@ TIME: ${currentTime}
 ORDER: ${receipt.orderId}
 CUSTOMER: ${receipt.customerName}
 TYPE: ${receipt.orderType === 'dine-in' ? 'DINE IN' : 'TAKE OUT'}
-------------
+`;
+
+        // ADDED: Include notes on receipt if present
+        if (receipt.notes && receipt.notes.trim()) {
+            receiptContent += `NOTES: ${receipt.notes.substring(0, 40)}\n`;
+        }
+
+        receiptContent += `------------
 `;
 
         // Add items in compact format
@@ -1343,7 +1381,7 @@ TOTAL: ₱${receipt.total.toFixed(2)}
         if (loading) {
             return (
                 <ThemedView style={styles.loadingContainer}>
-                    <ThemedText>Loading menu items...</ThemedText>
+                    <ThemedText style={styles.loading1}>Loading menu items...</ThemedText>
                 </ThemedView>
             );
         }
@@ -1559,6 +1597,7 @@ TOTAL: ₱${receipt.total.toFixed(2)}
                                         placeholder="Search Items"
                                         value={searchQuery}
                                         onChangeText={setSearchQuery}
+                                        placeholderTextColor="#854442"
                                     />
                                     <TouchableOpacity
                                         style={styles.reloadButton}
@@ -1656,7 +1695,7 @@ TOTAL: ₱${receipt.total.toFixed(2)}
                 </ThemedView>
             </ImageBackground>
 
-            {/* Order Summary Modal - Using extracted component */}
+            {/* Order Summary Modal - Using extracted component with notes props */}
             <OrderSummaryModal 
                 visible={isOrderSummaryVisible}
                 onClose={() => setIsOrderSummaryVisible(false)}
@@ -1672,6 +1711,8 @@ TOTAL: ₱${receipt.total.toFixed(2)}
                 loading={loading}
                 isProcessingOrder={isProcessingOrder}
                 isBluetoothConnected={isBluetoothConnected}
+                notes={notes}           // ADDED: pass notes
+                setNotes={setNotes}     // ADDED: pass setNotes
             />
 
             {/* PROCESSING MODAL */}
@@ -1730,6 +1771,15 @@ TOTAL: ₱${receipt.total.toFixed(2)}
                                     {currentReceipt.orderType === 'dine-in' ? 'DINE IN' : 'TAKE OUT'}
                                 </ThemedText>
                             </ThemedView>
+                            {/* ADDED: Show notes on receipt modal */}
+                            {currentReceipt.notes && currentReceipt.notes.trim() !== '' && (
+                                <ThemedView style={styles.receiptRow}>
+                                    <ThemedText style={styles.receiptLabel}>Notes:</ThemedText>
+                                    <ThemedText style={[styles.receiptValue, styles.notesValue]} numberOfLines={2}>
+                                        {currentReceipt.notes}
+                                    </ThemedText>
+                                </ThemedView>
+                            )}
                         </ThemedView>
 
                         <ThemedView style={styles.receiptSeparator}>
@@ -1946,7 +1996,7 @@ const styles = StyleSheet.create({
     },
     orderSummaryModal: {
         width: '90%',
-        height: '69%',
+        height: '80%',
         maxWidth: 500,
         maxHeight: '75%',
         backgroundColor: '#DFCCAF',
@@ -2042,6 +2092,15 @@ const styles = StyleSheet.create({
     receiptValue: {
         fontSize: 9,
         color: '#000000',
+        flex: 1,
+        textAlign: 'right',
+    },
+    // ADDED: notes value style
+    notesValue: {
+        fontSize: 8,
+        color: '#555',
+        fontStyle: 'italic',
+        maxWidth: 150,
     },
     receiptItems: {
         marginBottom: 6,
@@ -2662,6 +2721,9 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         backgroundColor: 'transparent',
     },
+    loading1: {
+        color: '#854442'
+    },
     emptyMenuContainer: {
         flex: 1,
         justifyContent: 'center',
@@ -2745,14 +2807,21 @@ const styles = StyleSheet.create({
     customerInputContainer: {
         flexDirection: 'row',
         alignItems: 'center',
-        marginBottom: 12,
+        marginBottom: 1,
+        backgroundColor: "transparent",
+    },
+    // ADDED: notes input container style
+    notesInputContainer: {
+        flexDirection: 'column',
+        marginBottom: 5,
         backgroundColor: "transparent",
     },
     inputLabel: {
         fontSize: 14,
         color: '#854442',
         fontWeight: '700',
-        width: 115
+        width: 115,
+        marginBottom: 4,
     },
     customerInput: {
         flex: 1,
@@ -2764,6 +2833,19 @@ const styles = StyleSheet.create({
         paddingVertical: 8,
         fontSize: 16,
         color: '#854442',
+    },
+    // ADDED: notes input style
+    notesInput: {
+        backgroundColor: 'rgba(255, 254, 234, 0.95)',
+        borderWidth: 2,
+        borderColor: '#854442',
+        borderRadius: 8,
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        fontSize: 14,
+        color: '#854442',
+        minHeight: 60,
+        textAlignVertical: 'top',
     },
     receiptOrderType: {
         fontSize: 16,

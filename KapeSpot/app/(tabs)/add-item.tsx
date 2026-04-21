@@ -710,7 +710,7 @@ export default function AddItemScreen() {
                             style={styles.backButton}
                             onPress={handleCancel}
                         >
-                            <Feather name="arrow-left" size={24} color="#874E3B" />
+                            <Feather name="arrow-left" size={24} color="#854442" />
                         </TouchableOpacity>
 
                         <ThemedText style={styles.mainTitle}>Add New Item</ThemedText>
@@ -734,104 +734,107 @@ export default function AddItemScreen() {
                         contentContainerStyle={styles.scrollContent}
                     >
                         <ThemedView style={styles.formContent}>
-                            {/* Left Side - Form */}
+                            {/* Single Column Layout - Item Details Only */}
                             <ThemedView style={styles.formSection}>
                                 <ThemedText style={styles.sectionHeader}>Item Details</ThemedText>
 
-                                <ThemedView style={styles.formRow}>
-                                    {/* Cup Type Field */}
-                                    <ThemedView style={styles.formGroup}>
-                                        <ThemedText style={styles.label}>Cup Type *</ThemedText>
+                                {/* Cup Type Field */}
+                                <ThemedView style={styles.formGroup}>
+                                    <ThemedText style={styles.label}>Cup Type *</ThemedText>
 
-                                        {/* Cup Selection */}
-                                        <ThemedView style={styles.cupSelectionContainer}>
-                                            {cups.length > 0 ? (
-                                                <ScrollView
-                                                    horizontal
-                                                    showsHorizontalScrollIndicator={false}
-                                                    style={styles.cupScrollView}
-                                                >
-                                                    {cups.map((cup) => (
-                                                        <TouchableOpacity
-                                                            key={cup.id}
-                                                            style={[
-                                                                styles.cupOption,
-                                                                newItem.cupName === cup.name && styles.cupOptionSelected
-                                                            ]}
-                                                            onPress={() => {
-                                                                setNewItem(prev => ({
-                                                                    ...prev,
-                                                                    cupName: cup.name,
-                                                                    // Auto-fill item name with cup name if empty
-                                                                    name: prev.name === '' ? `${cup.name} ${prev.code || ''}`.trim() : prev.name
-                                                                }));
-                                                                console.log('🥤 Selected cup:', cup.name, 'Stocks:', cup.stocks);
-                                                            }}
-                                                        >
-                                                            <ThemedView style={styles.cupOptionContent}>
+                                    {/* Cup Selection */}
+                                    <ThemedView style={styles.cupSelectionContainer}>
+                                        {cups.length > 0 ? (
+                                            <ScrollView
+                                                horizontal
+                                                showsHorizontalScrollIndicator={false}
+                                                style={styles.cupScrollView}
+                                            >
+                                                {cups.map((cup) => (
+                                                    <TouchableOpacity
+                                                        key={cup.id}
+                                                        style={[
+                                                            styles.cupOption,
+                                                            newItem.cupName === cup.name && styles.cupOptionSelected
+                                                        ]}
+                                                        onPress={() => {
+                                                            setNewItem(prev => ({
+                                                                ...prev,
+                                                                cupName: cup.name,
+                                                                // Auto-fill item name with cup name if empty
+                                                                name: prev.name === '' ? `${cup.name} ${prev.code || ''}`.trim() : prev.name
+                                                            }));
+                                                            console.log('🥤 Selected cup:', cup.name, 'Stocks:', cup.stocks);
+                                                        }}
+                                                    >
+                                                        <ThemedView style={styles.cupOptionContent}>
+                                                            <ThemedText style={[
+                                                                styles.cupOptionText,
+                                                                newItem.cupName === cup.name && styles.cupOptionTextSelected
+                                                            ]}>
+                                                                {cup.name}
+                                                            </ThemedText>
+                                                            {cup.size && (
                                                                 <ThemedText style={[
-                                                                    styles.cupOptionText,
-                                                                    newItem.cupName === cup.name && styles.cupOptionTextSelected
+                                                                    styles.cupSizeText,
+                                                                    newItem.cupName === cup.name && styles.cupSizeTextSelected
                                                                 ]}>
-                                                                    {cup.name}
+                                                                    {cup.size}
                                                                 </ThemedText>
-                                                                {cup.size && (
-                                                                    <ThemedText style={[
-                                                                        styles.cupSizeText,
-                                                                        newItem.cupName === cup.name && styles.cupSizeTextSelected
-                                                                    ]}>
-                                                                        {cup.size}
-                                                                    </ThemedText>
-                                                                )}
-                                                                <ThemedText style={styles.cupStockText}>
-                                                                    Stock: {cup.stocks}
-                                                                </ThemedText>
-                                                            </ThemedView>
-                                                        </TouchableOpacity>
-                                                    ))}
-                                                </ScrollView>
-                                            ) : (
-                                                <ThemedText style={styles.noCupsText}>
-                                                    No cups available. Please add cups first.
-                                                </ThemedText>
-                                            )}
-                                        </ThemedView>
-
-                                        {/* Show selected cup info */}
-                                        {newItem.cupName && (
-                                            <ThemedView style={styles.selectedCupInfo}>
-                                                <ThemedText style={styles.selectedCupText}>
-                                                    Selected: {newItem.cupName}
-                                                </ThemedText>
-                                            </ThemedView>
+                                                            )}
+                                                            <ThemedText style={styles.cupStockText}>
+                                                                Stock: {cup.stocks}
+                                                            </ThemedText>
+                                                        </ThemedView>
+                                                    </TouchableOpacity>
+                                                ))}
+                                            </ScrollView>
+                                        ) : (
+                                            <ThemedText style={styles.noCupsText}>
+                                                No cups available. Please add cups first.
+                                            </ThemedText>
                                         )}
                                     </ThemedView>
-                                    <ThemedView style={styles.formGroup}>
-                                        <ThemedText style={styles.label}>Item Name *</ThemedText>
-                                        <TextInput
-                                            ref={nameInputRef}
-                                            style={styles.input}
-                                            value={newItem.name}
-                                            onChangeText={(text) => setNewItem(prev => ({ ...prev, name: text }))}
-                                            placeholder="Enter item name"
-                                            onFocus={() => handleInputFocus('name', 0)}
-                                            returnKeyType="next"
-                                        />
-                                    </ThemedView>
-                                    <ThemedView style={styles.formGroup}>
-                                        <ThemedText style={styles.label}>Item Code *</ThemedText>
-                                        <TextInput
-                                            ref={codeInputRef}
-                                            style={styles.input}
-                                            value={newItem.code}
-                                            onChangeText={(text) => setNewItem(prev => ({ ...prev, code: text }))}
-                                            placeholder="Enter item code"
-                                            onFocus={() => handleInputFocus('code', 50)}
-                                            returnKeyType="next"
-                                        />
-                                    </ThemedView>
+
+                                    {/* Show selected cup info */}
+                                    {newItem.cupName && (
+                                        <ThemedView style={styles.selectedCupInfo}>
+                                            <ThemedText style={styles.selectedCupText}>
+                                                Selected: {newItem.cupName}
+                                            </ThemedText>
+                                        </ThemedView>
+                                    )}
                                 </ThemedView>
 
+                                {/* Item Name */}
+                                <ThemedView style={styles.formGroup}>
+                                    <ThemedText style={styles.label}>Item Name *</ThemedText>
+                                    <TextInput
+                                        ref={nameInputRef}
+                                        style={styles.input}
+                                        value={newItem.name}
+                                        onChangeText={(text) => setNewItem(prev => ({ ...prev, name: text }))}
+                                        placeholder="Enter item name"
+                                        onFocus={() => handleInputFocus('name', 0)}
+                                        returnKeyType="next"
+                                    />
+                                </ThemedView>
+
+                                {/* Item Code */}
+                                <ThemedView style={styles.formGroup}>
+                                    <ThemedText style={styles.label}>Item Code *</ThemedText>
+                                    <TextInput
+                                        ref={codeInputRef}
+                                        style={styles.input}
+                                        value={newItem.code}
+                                        onChangeText={(text) => setNewItem(prev => ({ ...prev, code: text }))}
+                                        placeholder="Enter item code"
+                                        onFocus={() => handleInputFocus('code', 50)}
+                                        returnKeyType="next"
+                                    />
+                                </ThemedView>
+
+                                {/* Item Price and Stocks in Row */}
                                 <ThemedView style={styles.formRow}>
                                     <ThemedView style={styles.formGroup}>
                                         <ThemedText style={styles.label}>Item Price *</ThemedText>
@@ -861,6 +864,7 @@ export default function AddItemScreen() {
                                     </ThemedView>
                                 </ThemedView>
 
+                                {/* Category */}
                                 <ThemedView style={styles.formGroup}>
                                     <ThemedText style={styles.label}>Category *</ThemedText>
                                     <TouchableOpacity
@@ -891,7 +895,7 @@ export default function AddItemScreen() {
                                             <ThemedView style={styles.dropdownContainer}>
                                                 {/* Header with Close Button (X) */}
                                                 <ThemedView style={styles.dropdownHeader}>
-                                                    <ThemedText style={styles.dropdownTitle}>Select Category.</ThemedText>
+                                                    <ThemedText style={styles.dropdownTitle}>Select Category</ThemedText>
                                                     <TouchableOpacity
                                                         style={styles.closeButton}
                                                         onPress={() => setShowCategoryDropdown(false)}
@@ -929,6 +933,7 @@ export default function AddItemScreen() {
                                     )}
                                 </ThemedView>
 
+                                {/* Description */}
                                 <ThemedView style={styles.formGroup}>
                                     <ThemedText style={styles.label}>Description</ThemedText>
                                     <TextInput
@@ -943,47 +948,47 @@ export default function AddItemScreen() {
                                         returnKeyType="done"
                                     />
                                 </ThemedView>
-                            </ThemedView>
 
-                            {/* Right Side - Image Upload */}
-                            <ThemedView style={styles.imageSection}>
-                                <ThemedText style={styles.sectionHeader}>Upload Image</ThemedText>
-                                <ThemedView style={styles.imageUploadArea}>
-                                    <ThemedView style={styles.imagePlaceholder}>
-                                        {imageUri ? (
-                                            <Image
-                                                source={{ uri: imageUri }}
-                                                style={styles.previewImage}
-                                                resizeMode="cover"
-                                            />
-                                        ) : (
-                                            <>
-                                                <Feather name="image" size={48} color="#D4A574" />
-                                                <ThemedText style={styles.uploadText}>No image selected</ThemedText>
-                                            </>
+                                {/* IMAGE UPLOAD SECTION - MOVED TO BOTTOM */}
+                                <ThemedView style={styles.imageSection}>
+                                    <ThemedText style={styles.sectionHeader}>Upload Image</ThemedText>
+                                    <ThemedView style={styles.imageUploadArea}>
+                                        <ThemedView style={styles.imagePlaceholder}>
+                                            {imageUri ? (
+                                                <Image
+                                                    source={{ uri: imageUri }}
+                                                    style={styles.previewImage}
+                                                    resizeMode="cover"
+                                                />
+                                            ) : (
+                                                <>
+                                                    <Feather name="image" size={48} color="#854442" />
+                                                    <ThemedText style={styles.uploadText}>No image selected</ThemedText>
+                                                </>
+                                            )}
+                                        </ThemedView>
+
+                                        <ThemedView style={styles.uploadButtons}>
+                                            <TouchableOpacity
+                                                style={styles.uploadButton}
+                                                onPress={handleCapture}
+                                            >
+                                                <ThemedText style={styles.uploadButtonText}>Capture</ThemedText>
+                                            </TouchableOpacity>
+                                            <TouchableOpacity
+                                                style={styles.uploadButton}
+                                                onPress={handleImport}
+                                            >
+                                                <ThemedText style={styles.uploadButtonText}>Import Image</ThemedText>
+                                            </TouchableOpacity>
+                                        </ThemedView>
+
+                                        {imageUri && (
+                                            <ThemedText style={styles.imageSelectedText}>
+                                                ✓ Image selected (Base64)
+                                            </ThemedText>
                                         )}
                                     </ThemedView>
-
-                                    <ThemedView style={styles.uploadButtons}>
-                                        <TouchableOpacity
-                                            style={styles.uploadButton}
-                                            onPress={handleCapture}
-                                        >
-                                            <ThemedText style={styles.uploadButtonText}>Capture</ThemedText>
-                                        </TouchableOpacity>
-                                        <TouchableOpacity
-                                            style={styles.uploadButton}
-                                            onPress={handleImport}
-                                        >
-                                            <ThemedText style={styles.uploadButtonText}>Import Image</ThemedText>
-                                        </TouchableOpacity>
-                                    </ThemedView>
-
-                                    {imageUri && (
-                                        <ThemedText style={styles.imageSelectedText}>
-                                            ✓ Image selected (Base64)
-                                        </ThemedText>
-                                    )}
                                 </ThemedView>
                             </ThemedView>
                         </ThemedView>
@@ -1012,11 +1017,11 @@ const styles = StyleSheet.create({
         alignItems: 'center',
     },
     headerSection: {
-        backgroundColor: "rgba(255, 254, 234, 0.95)",
+        backgroundColor: "rgba(223, 204, 175, 0.7)",
         borderRadius: 12,
         padding: 16,
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
         marginBottom: 16,
         flexDirection: 'row',
         justifyContent: 'space-between',
@@ -1033,7 +1038,7 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     saveButton: {
-        backgroundColor: '#874E3B',
+        backgroundColor: '#854442',
         paddingHorizontal: 20,
         paddingVertical: 10,
         borderRadius: 6,
@@ -1050,24 +1055,23 @@ const styles = StyleSheet.create({
         flexGrow: 1,
     },
     formContent: {
-        flexDirection: 'row',
-        gap: 20,
+        flexDirection: 'column',
+        backgroundColor: 'transparent'
     },
     formSection: {
-        flex: 1,
         backgroundColor: "rgba(255, 254, 234, 0.95)",
         borderRadius: 12,
         padding: 20,
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
     },
     imageSection: {
-        width: 200,
+        marginTop: 20,
         backgroundColor: "rgba(255, 254, 234, 0.95)",
         borderRadius: 12,
         padding: 20,
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
     },
     sectionHeader: {
         fontSize: 16,
@@ -1082,19 +1086,18 @@ const styles = StyleSheet.create({
         backgroundColor: "rgba(255, 254, 234, 0.95)",
     },
     formGroup: {
-        flex: 1,
+        marginBottom: 16,
         backgroundColor: "rgba(255, 254, 234, 0.95)",
     },
     dropdownContainer: {
         backgroundColor: '#FFFEEA',
         borderRadius: 8,
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
         width: '80%',
         maxHeight: 300,
-        overflow: 'hidden', // Add this to contain the header
+        overflow: 'hidden',
     },
-
     dropdownHeader: {
         flexDirection: 'row',
         justifyContent: 'space-between',
@@ -1102,33 +1105,31 @@ const styles = StyleSheet.create({
         paddingHorizontal: 16,
         paddingVertical: 12,
         borderBottomWidth: 1,
-        borderBottomColor: '#D4A574',
-        backgroundColor: "#fffecaF2"
+        borderBottomColor: '#854442',
+        backgroundColor: "rgba(223, 204, 175, 0.7)"
     },
-
     dropdownTitle: {
         fontSize: 16,
         fontWeight: 'bold',
-        color: '#874E3B',
+        color: '#854442',
     },
-
     closeButton: {
         padding: 4,
     },
-
     dropdownScrollView: {
-        maxHeight: 300 - 50, // Adjust height to account for header
+        maxHeight: 300 - 50,
     },
     label: {
-        fontSize: 14,
-        backgroundColor: "rgba(255, 254, 234, 0.95)",
+        fontSize: 16,
+        backgroundColor: 'transparent',
         marginBottom: 6,
-        fontWeight: '500',
+        fontWeight: '600',
+        color: "#854442"
     },
     input: {
         backgroundColor: '#FFFFFF',
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
         borderRadius: 6,
         paddingHorizontal: 12,
         paddingVertical: 10,
@@ -1139,7 +1140,7 @@ const styles = StyleSheet.create({
     categoryDropdown: {
         backgroundColor: '#FFFFFF',
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
         borderRadius: 6,
         paddingHorizontal: 12,
         paddingVertical: 10,
@@ -1161,7 +1162,6 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
     },
-
     categoryOption: {
         paddingHorizontal: 16,
         paddingVertical: 12,
@@ -1195,7 +1195,7 @@ const styles = StyleSheet.create({
     cupOption: {
         backgroundColor: '#F5E6D3',
         borderWidth: 2,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
         borderRadius: 8,
         padding: 12,
         marginRight: 8,
@@ -1207,6 +1207,7 @@ const styles = StyleSheet.create({
     },
     cupOptionContent: {
         alignItems: 'center',
+        backgroundColor: 'transparent'
     },
     cupOptionText: {
         fontSize: 14,
@@ -1257,6 +1258,7 @@ const styles = StyleSheet.create({
     },
     imageUploadArea: {
         alignItems: 'center',
+        backgroundColor: 'transparent'
     },
     cupSuggestions: {
         marginTop: 8,
@@ -1278,7 +1280,7 @@ const styles = StyleSheet.create({
         marginRight: 8,
         marginBottom: 4,
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
         flexDirection: 'row',
         alignItems: 'center',
     },
@@ -1298,7 +1300,7 @@ const styles = StyleSheet.create({
         height: 150,
         backgroundColor: '#F5E6D3',
         borderWidth: 2,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
         borderStyle: 'dashed',
         borderRadius: 8,
         justifyContent: 'center',
@@ -1319,9 +1321,10 @@ const styles = StyleSheet.create({
     uploadButtons: {
         flexDirection: 'row',
         gap: 8,
+        backgroundColor: 'transparent'
     },
     uploadButton: {
-        backgroundColor: '#874E3B',
+        backgroundColor: '#854442',
         paddingHorizontal: 12,
         paddingVertical: 8,
         borderRadius: 6,

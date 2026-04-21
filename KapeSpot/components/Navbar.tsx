@@ -235,7 +235,7 @@ export default function Navbar({ cartItemCount = 0, onCartPress, activeNav }: Na
                         </Animated.View>
                         <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
                             <ThemedText style={styles.navbarTitle}>
-                                KAPE SPOT
+                                KAPESPOT
                             </ThemedText>
                         </Animated.View>
                     </TouchableOpacity>
@@ -373,7 +373,7 @@ const styles = StyleSheet.create({
         borderRadius: 22,
     },
     navbarTitle: {
-        fontSize: 26,
+        fontSize: 23,
         fontFamily: 'LobsterTwoRegular',
         color: '#dfccaf',
         letterSpacing: 1.5,

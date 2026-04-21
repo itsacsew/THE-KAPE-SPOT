@@ -8,7 +8,10 @@ import {
     Alert,
     Modal,
     Dimensions,
-    Text
+    Text,
+    ActivityIndicator,
+    Share,
+    Platform
 } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -18,6 +21,7 @@ import { NetworkScanner } from '@/lib/network-scanner';
 import { useFocusEffect } from '@react-navigation/native';
 import React from 'react';
 import { OfflineSyncService } from '@/lib/offline-sync';
+import { PermissionsAndroid } from 'react-native';
 import {
     getFirestore,
     collection,
@@ -30,7 +34,11 @@ import {
     onSnapshot
 } from 'firebase/firestore';
 import { app } from '@/lib/firebase-config';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
+import * as RNFS from 'react-native-fs';
 import BleManager from 'react-native-ble-manager';
+import ReactNativeBlobUtil from 'react-native-blob-util'; // ADD THIS IMPORT
 
 interface OrderItem {
     name: string;
@@ -54,6 +62,7 @@ interface OrderData {
     cups_used?: number;
     order_type?: string;
     updated_at?: string;
+    notes?: string;
 }
 
 interface BluetoothConnection {
@@ -62,6 +71,15 @@ interface BluetoothConnection {
     peripheralId: string;
     serviceId: string;
     connectedAt: string | null;
+}
+
+// Interface for grouped item export
+interface GroupedExportItem {
+    name: string;
+    totalQuantity: number;
+    price: number;
+    totalSales: number;
+    dates: string[];
 }
 
 const { width } = Dimensions.get('window');
@@ -76,7 +94,15 @@ export default function LogScreen() {
     const [showOrderModal, setShowOrderModal] = useState(false);
     const [filter, setFilter] = useState<'all' | 'unpaid' | 'paid' | 'cancelled'>('all');
     const [showItemsModal, setShowItemsModal] = useState(false);
-    const [allItems, setAllItems] = useState<any[]>([]);
+    const [allItems, setAllItems] = useState<{
+        name: string;
+        quantity: number;
+        price: number;
+        totalPrice: number;
+        orderIds: string[];
+        customerNames: string[];
+        dates: string[];
+    }[]>([]);
     const [isBluetoothConnected, setIsBluetoothConnected] = useState<boolean>(false);
     const [bluetoothDeviceName, setBluetoothDeviceName] = useState<string>('');
     const [bluetoothConnection, setBluetoothConnection] = useState<BluetoothConnection | null>(null);
@@ -84,6 +110,7 @@ export default function LogScreen() {
     const [lastUpdate, setLastUpdate] = useState<string>('');
     const [hasFirebaseData, setHasFirebaseData] = useState<boolean>(false);
     const [checkingFirebase, setCheckingFirebase] = useState<boolean>(false);
+    const [exportingItems, setExportingItems] = useState(false);
 
     // Initialize Firebase
     const db = getFirestore(app);
@@ -133,7 +160,8 @@ export default function LogScreen() {
                                     created_at: docData.created_at,
                                     cups_used: docData.cups_used,
                                     order_type: docData.order_type,
-                                    updated_at: docData.updated_at
+                                    updated_at: docData.updated_at,
+                                    notes: docData.notes || ''
                                 };
 
                                 firebaseOrders.push(order);
@@ -293,7 +321,8 @@ export default function LogScreen() {
                             created_at: data.created_at,
                             cups_used: data.cups_used,
                             order_type: data.order_type,
-                            updated_at: data.updated_at
+                            updated_at: data.updated_at,
+                            notes: data.notes || ''
                         };
                     });
 
@@ -500,34 +529,402 @@ export default function LogScreen() {
         );
     };
 
+    // showAllItems with date tracking for export
     const showAllItems = () => {
         try {
-            // Collect all items from all orders (including unpaid)
-            const items: any[] = [];
+            // Use Map to combine same items
+            const itemsMap = new Map<string, {
+                name: string;
+                quantity: number;
+                price: number;
+                totalPrice: number;
+                orderIds: string[];
+                customerNames: string[];
+                dates: string[];
+            }>();
 
             orders.forEach(order => {
-                // Include items from all order statuses
-                order.items.forEach(item => {
-                    // Only include non-cancelled items
-                    if (!item.cancelled) {
-                        items.push({
-                            ...item,
-                            orderId: order.orderId,
-                            customerName: order.customerName,
-                            timestamp: order.timestamp,
-                            status: order.status
-                        });
-                    }
-                });
+                // Only include paid orders for the items list
+                if (order.status === 'paid') {
+                    order.items.forEach(item => {
+                        // Only include non-cancelled items
+                        if (!item.cancelled) {
+                            const itemKey = item.name.trim().toLowerCase();
+                            const originalName = item.name;
+                            const orderDate = new Date(order.timestamp).toLocaleDateString();
+                            
+                            if (itemsMap.has(itemKey)) {
+                                const existing = itemsMap.get(itemKey)!;
+                                existing.quantity += item.quantity;
+                                existing.totalPrice += (item.price * item.quantity);
+                                if (!existing.orderIds.includes(order.orderId)) {
+                                    existing.orderIds.push(order.orderId);
+                                }
+                                if (!existing.customerNames.includes(order.customerName)) {
+                                    existing.customerNames.push(order.customerName);
+                                }
+                                if (!existing.dates.includes(orderDate)) {
+                                    existing.dates.push(orderDate);
+                                }
+                            } else {
+                                itemsMap.set(itemKey, {
+                                    name: originalName,
+                                    quantity: item.quantity,
+                                    price: item.price,
+                                    totalPrice: item.price * item.quantity,
+                                    orderIds: [order.orderId],
+                                    customerNames: [order.customerName],
+                                    dates: [orderDate]
+                                });
+                            }
+                        }
+                    });
+                }
             });
 
-            setAllItems(items);
+            // Convert Map to array and sort by name
+            const groupedItems = Array.from(itemsMap.values()).sort((a, b) => 
+                a.name.localeCompare(b.name)
+            );
+            
+            setAllItems(groupedItems);
             setShowItemsModal(true);
         } catch (error) {
             console.error('❌ Error preparing items list:', error);
             Alert.alert('Error', 'Failed to load items list');
         }
     };
+
+    // NEW EXPORT FUNCTION - MATCHING try.tsx APPROACH
+    // Generate CSV content with grouped items (BY ITEM, not by order)
+    const generateGroupedItemsCSV = (items: any[]): string => {
+        // Create CSV content with proper headers
+        let csvContent = 'ITEMS,QNTY,PRICE OF THE ITEM,TOTAL SALES,DATE ORDERED\n';
+
+        let grandTotalSales = 0;
+        let totalQuantity = 0;
+
+        // Sort items by name
+        const sortedItems = [...items].sort((a, b) => a.name.localeCompare(b.name));
+
+        sortedItems.forEach((item) => {
+            // Clean item name - remove problematic characters
+            const cleanItemName = item.name
+                .replace(/,/g, ' ')      // Remove commas
+                .replace(/"/g, "'")      // Replace double quotes with single
+                .replace(/\n/g, ' ')     // Remove new lines
+                .replace(/\r/g, ' ')     // Remove carriage returns
+                .trim();
+
+            const quantity = item.quantity;
+            const unitPrice = item.price;
+            const totalSales = item.totalPrice;
+            const datesString = item.dates.join(', ');
+
+            csvContent += `"${cleanItemName}","${quantity}","₱${unitPrice.toFixed(2)}","₱${totalSales.toFixed(2)}","${datesString}"\n`;
+            
+            grandTotalSales += totalSales;
+            totalQuantity += quantity;
+        });
+
+        // Add summary section
+        csvContent += '\n';
+        csvContent += '"SUMMARY","","","",""\n';
+        csvContent += `"Total Unique Items","${sortedItems.length}","","",""\n`;
+        csvContent += `"Total Quantity Sold","${totalQuantity}","","",""\n`;
+        csvContent += `"Grand Total Sales","","","","₱${grandTotalSales.toFixed(2)}"\n`;
+        csvContent += `"Export Date","${new Date().toLocaleDateString()}","","",""\n`;
+        csvContent += `"Generated By","KapeSpot POS","","",""\n`;
+
+        return csvContent;
+    };
+
+
+// ============== 100% WORKING EXPORT FUNCTION ==============
+const exportGroupedItemsToExcel = async () => {
+    if (allItems.length === 0) {
+        Alert.alert('No Data', 'There are no items to export.');
+        return;
+    }
+
+    setExportingItems(true);
+    
+    try {
+        // Request permission for Android
+        if (Platform.OS === 'android') {
+            const androidVersion = parseInt(String(Platform.Version), 10);
+            
+            if (androidVersion < 29) { // Below Android 10 needs permission
+                const granted = await PermissionsAndroid.request(
+                    PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE,
+                    {
+                        title: 'Storage Permission',
+                        message: 'App needs permission to save CSV files to Downloads folder',
+                        buttonPositive: 'OK',
+                        buttonNegative: 'Cancel',
+                    }
+                );
+                if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+                    Alert.alert('Permission Denied', 'Cannot save file without storage permission.');
+                    setExportingItems(false);
+                    return;
+                }
+            }
+        }
+
+        const csvContent = generateGroupedItemsCSV(allItems);
+        const timestamp = new Date().toISOString().split('T')[0];
+        const fileName = `KapeSpot_Items_Report_${timestamp}.csv`;
+        
+        // ============== DIRECT SAVE TO /storage/Download/ ==============
+        let filePath = '';
+        
+        if (Platform.OS === 'android') {
+            // Try multiple paths to find the working one
+            const possiblePaths = [
+                '/storage/Download', 
+                ReactNativeBlobUtil.fs.dirs.DownloadDir,
+            ];
+            
+            let workingPath = '';
+            for (const path of possiblePaths) {
+                try {
+                    const folderExists = await ReactNativeBlobUtil.fs.exists(path);
+                    if (folderExists) {
+                        workingPath = path;
+                        console.log('✅ Found working path:', path);
+                        break;
+                    }
+                } catch (e) {
+                    console.log('Path not accessible:', path);
+                }
+            }
+            
+            // If no path found, use default
+            if (!workingPath) {
+                workingPath = '/storage/Download';
+                // Create folder if not exists
+                try {
+                    await ReactNativeBlobUtil.fs.mkdir(workingPath);
+                } catch (e) {
+                    console.log('Folder creation skipped:', e);
+                }
+            }
+            
+            filePath = `${workingPath}/${fileName}`;
+        } else {
+            // iOS path
+            const dirs = ReactNativeBlobUtil.fs.dirs;
+            filePath = `${dirs.DocumentDir}/${fileName}`;
+        }
+        
+        console.log('📁 Saving to:', filePath);
+        
+        // Write the file
+        await ReactNativeBlobUtil.fs.writeFile(filePath, csvContent, 'utf8');
+        
+        // Verify file exists
+        const fileExists = await ReactNativeBlobUtil.fs.exists(filePath);
+        
+        if (!fileExists) {
+            throw new Error('File save failed - file not found after write');
+        }
+        
+        // Get file info
+        const fileInfo = await ReactNativeBlobUtil.fs.stat(filePath);
+        console.log('✅ File saved:', fileInfo);
+        
+        // Calculate totals
+        const totalUniqueItems = allItems.length;
+        const totalQuantitySold = allItems.reduce((sum, item) => sum + item.quantity, 0);
+        const grandTotalSales = allItems.reduce((sum, item) => sum + item.totalPrice, 0);
+        
+        // Show success with DOWNLOAD button
+        Alert.alert(
+            '✅ Export Successful!',
+            `📊 ${totalUniqueItems} unique items\n🥤 ${totalQuantitySold} servings\n💰 ₱${grandTotalSales.toFixed(2)}\n\n📄 ${fileName}\n📂 storage/Download/`,
+            [
+                {
+                    text: '💾 DOWNLOAD FILE',
+                    onPress: () => downloadFileNow(filePath, fileName)
+                },
+                {
+                    text: 'OK',
+                    style: 'default'
+                }
+            ]
+        );
+        
+    } catch (error: any) {
+        console.error('Export error:', error);
+        Alert.alert('Export Failed', error?.message || 'Unknown error occurred');
+    } finally {
+        setExportingItems(false);
+    }
+};
+
+// ============== DOWNLOAD FILE FUNCTION ==============
+const downloadFileNow = async (filePath: string, fileName: string) => {
+    try {
+        // Check if file exists
+        const exists = await ReactNativeBlobUtil.fs.exists(filePath);
+        
+        if (!exists) {
+            Alert.alert('Error', 'File not found. Please export again.');
+            return;
+        }
+        
+        if (Platform.OS === 'android') {
+            // For Android - trigger download manager
+            // This will show the system download notification
+            await ReactNativeBlobUtil.android.addCompleteDownload({
+                title: fileName,
+                description: 'KapeSpot Items Report',
+                mime: 'text/csv',
+                path: filePath,
+                showNotification: true,
+            });
+            
+            Alert.alert(
+                '✅ Download Complete!',
+                `File saved to:\n📂 ${filePath}\n\nCheck your File Manager or Downloads app.`,
+                [{ text: 'OK' }]
+            );
+        } else {
+            // For iOS - share and save
+            await Sharing.shareAsync(filePath, {
+                mimeType: 'text/csv',
+                dialogTitle: 'Save CSV Report',
+                UTI: 'public.comma-separated-values-text'
+            });
+        }
+        
+    } catch (error: any) {
+        console.error('Download error:', error);
+        Alert.alert('Download Failed', error?.message || 'Unable to download file');
+    }
+};
+
+// Function to open downloaded file
+const openDownloadedFile = async (filePath: string) => {
+    try {
+        const fileExists = await ReactNativeBlobUtil.fs.exists(filePath);
+        
+        if (!fileExists) {
+            Alert.alert('File Not Found', 'The file has been moved or deleted.');
+            return;
+        }
+        
+        if (Platform.OS === 'android') {
+            await ReactNativeBlobUtil.android.actionViewIntent(filePath, 'text/csv');
+        } else {
+            // For iOS - use Sharing
+            await Sharing.shareAsync(filePath, {
+                mimeType: 'text/csv',
+                dialogTitle: 'Share CSV File',
+            });
+        }
+    } catch (error) {
+        console.error('Error opening file:', error);
+        Alert.alert('Cannot Open', 'Please use File Manager to open the file from Downloads folder.');
+    }
+};
+
+// Function to open Downloads folder directly
+const openDownloadsFolder = async () => {
+    try {
+        if (Platform.OS === 'android') {
+            const downloadsPath = ReactNativeBlobUtil.fs.dirs.DownloadDir;
+            await ReactNativeBlobUtil.android.actionViewIntent(downloadsPath, 'resource/folder');
+        } else {
+            Alert.alert(
+                'iOS Instructions',
+                'Open the Files app and go to Downloads folder to find your CSV file.',
+                [{ text: 'OK' }]
+            );
+        }
+    } catch (error) {
+        Alert.alert(
+            'Downloads Folder',
+            `Your file is saved in the Downloads folder.\n\nPath: ${ReactNativeBlobUtil.fs.dirs.DownloadDir}`,
+            [{ text: 'OK' }]
+        );
+    }
+};
+
+// NEW FUNCTION: Download file to device (forces download/save)
+const downloadFileToDevice = async (filePath: string, fileName: string) => {
+    try {
+        // Check if file exists
+        const fileExists = await ReactNativeBlobUtil.fs.exists(filePath);
+        
+        if (!fileExists) {
+            Alert.alert('File Not Found', 'The file does not exist. Please export again.');
+            return;
+        }
+
+        // For Android - trigger download notification
+        if (Platform.OS === 'android') {
+            // This will show in the device's download manager
+            await ReactNativeBlobUtil.android.actionViewIntent(filePath, 'text/csv');
+            
+            Alert.alert(
+                '✅ Download Complete!',
+                `File "${fileName}" has been saved to your Downloads folder.\n\nYou can find it in:\n• File Manager > Downloads\n• Download Manager app`,
+                [{ text: 'OK' }]
+            );
+        } else {
+            // For iOS - share the file
+            const shareOptions = {
+                title: 'Save CSV File',
+                url: filePath,
+                type: 'text/csv'
+            };
+            await Share.share(shareOptions);
+        }
+    } catch (error) {
+        console.error('Download error:', error);
+        Alert.alert(
+            'Download Failed',
+            'Unable to download file. Please check storage permissions.'
+        );
+    }
+};
+
+    // Helper function to open file manager (updated for better Android support)
+const openFileManager = async (filePath: string) => {
+    try {
+        if (Platform.OS === 'android') {
+            // Check if file exists first
+            const fileExists = await ReactNativeBlobUtil.fs.exists(filePath);
+            
+            if (!fileExists) {
+                Alert.alert('File Not Found', 'The file no longer exists. Please export again.');
+                return;
+            }
+            
+            // For Android - try to open the file directly
+            await ReactNativeBlobUtil.android.actionViewIntent(filePath, 'text/csv');
+        } else {
+            // For iOS - share the file
+            const shareOptions = {
+                title: 'Share CSV File',
+                url: `file://${filePath}`,
+                type: 'text/csv'
+            };
+            await Share.share(shareOptions);
+        }
+    } catch (error) {
+        console.error('Error opening file manager:', error);
+        // Fallback: Show detailed instructions
+        const fileName = filePath.split('/').pop();
+        Alert.alert(
+            '📁 File Location',
+            `Your CSV file has been saved to:\n\n📂 Downloads folder\n📄 File: ${fileName}\n\nTo access it:\n1. Open your File Manager app\n2. Navigate to Downloads folder\n3. Look for ${fileName}`,
+            [{ text: 'OK' }]
+        );
+    }
+};
 
     const closeItemsModal = () => {
         setShowItemsModal(false);
@@ -599,7 +996,8 @@ export default function LogScreen() {
         if (loading) {
             return (
                 <ThemedView style={styles.loadingContainer}>
-                    <ThemedText style={styles.loadingContainers}>Loading orders</ThemedText>
+                    <ActivityIndicator size="large" color="#874E3B" />
+                    <ThemedText style={styles.loadingContainers}>Loading orders...</ThemedText>
                 </ThemedView>
             );
         }
@@ -664,8 +1062,15 @@ export default function LogScreen() {
                                 </ThemedView>
                             )}
 
-                            {/* Order Date & Time */}
-                            
+                            {/* Notes Section in Order Card */}
+                            {order.notes && order.notes.trim() !== '' && (
+                                <ThemedView style={styles.notesTag}>
+                                    <Feather name="message-square" size={8} color="#874E3B" />
+                                    <ThemedText style={styles.notesTagText} numberOfLines={2}>
+                                        {order.notes.length > 40 ? order.notes.substring(0, 40) + '...' : order.notes}
+                                    </ThemedText>
+                                </ThemedView>
+                            )}
 
                             {/* Items Summary */}
                             <ThemedView style={styles.itemDisplay}>
@@ -765,8 +1170,6 @@ export default function LogScreen() {
                                     </TouchableOpacity>
                                 </ThemedView>
                             </ThemedView>
-
-                            
 
                             {/* Filter Buttons - ALL STATUSES */}
                             <ThemedView style={styles.filterContainer}>
@@ -915,6 +1318,21 @@ export default function LogScreen() {
                                         </ThemedView>
                                     )}
 
+                                    {/* Notes Section in Modal */}
+                                    {selectedOrder?.notes && selectedOrder.notes.trim() !== '' && (
+                                        <ThemedView style={styles.modalNotesSection}>
+                                            <ThemedView style={styles.modalNotesHeader}>
+                                                <Feather name="message-square" size={14} color="#874E3B" />
+                                                <ThemedText style={styles.modalNotesLabel}>Notes / Comment:</ThemedText>
+                                            </ThemedView>
+                                            <ThemedView style={styles.modalNotesContent}>
+                                                <ThemedText style={styles.modalNotesText}>
+                                                    {selectedOrder.notes}
+                                                </ThemedText>
+                                            </ThemedView>
+                                        </ThemedView>
+                                    )}
+
                                     {/* Cups Used in Modal */}
                                     {selectedOrder?.order_type === 'take-out' && selectedOrder?.cups_used && selectedOrder.cups_used > 0 && (
                                         <ThemedView style={styles.cupsSection}>
@@ -984,7 +1402,7 @@ export default function LogScreen() {
                         </ThemedView>
                     </Modal>
 
-                    {/* All Items List Modal */}
+                    {/* All Items List Modal - WITH UPDATED EXPORT BUTTON */}
                     <Modal
                         visible={showItemsModal}
                         animationType="slide"
@@ -1000,10 +1418,22 @@ export default function LogScreen() {
                                             All Order Items
                                         </ThemedText>
                                         <ThemedText style={styles.itemsCount}>
-                                            {allItems.length} active items total
+                                            {allItems.length} unique items total
                                         </ThemedText>
                                     </ThemedView>
                                     <ThemedView style={styles.modalHeaderRight}>
+                                        {/* Export to Excel Button - UPDATED to use new export function */}
+                                        <TouchableOpacity
+                                            style={[styles.exportItemsButton, exportingItems && styles.exportButtonDisabled]}
+                                            onPress={exportGroupedItemsToExcel}
+                                            disabled={exportingItems || allItems.length === 0}
+                                        >
+                                            {exportingItems ? (
+                                                <ActivityIndicator size="small" color="#FFFEEA" />
+                                            ) : (
+                                                <Feather name="download" size={18} color="#FFFEEA" />
+                                            )}
+                                        </TouchableOpacity>
                                         <TouchableOpacity onPress={closeItemsModal} style={styles.closeButton}>
                                             <Feather name="x" size={24} color="#854442" />
                                         </TouchableOpacity>
@@ -1018,16 +1448,23 @@ export default function LogScreen() {
                                                     {item.name}
                                                 </ThemedText>
                                                 <ThemedText style={styles.itemOrderInfo}>
-                                                    Order #{item.orderId?.slice(-4)} • {item.customerName} • {item.status?.toUpperCase()}
+                                                    From {item.orderIds.length} order(s): {item.customerNames.slice(0, 2).join(', ')}
+                                                    {item.customerNames.length > 2 && ` +${item.customerNames.length - 2} more`}
+                                                </ThemedText>
+                                                <ThemedText style={styles.itemDateInfo}>
+                                                    Date Paid: {item.dates.join(', ')}
                                                 </ThemedText>
                                             </ThemedView>
 
                                             <ThemedView style={styles.itemPriceSection}>
                                                 <ThemedText style={styles.itemQuantityModal}>
-                                                    x{item.quantity || 1}
+                                                    x{item.quantity}
                                                 </ThemedText>
                                                 <ThemedText style={styles.itemPriceModal}>
-                                                    ₱{((item.price || 0) * (item.quantity || 1)).toFixed(2)}
+                                                    ₱{item.totalPrice.toFixed(2)}
+                                                </ThemedText>
+                                                <ThemedText style={styles.itemUnitPrice}>
+                                                    @ ₱{item.price.toFixed(2)} each
                                                 </ThemedText>
                                             </ThemedView>
                                         </ThemedView>
@@ -1036,10 +1473,10 @@ export default function LogScreen() {
 
                                 <ThemedView style={styles.itemsFooter}>
                                     <ThemedText style={styles.itemsTotal}>
-                                        Total: ₱{allItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0).toFixed(2)}
+                                        Total: ₱{allItems.reduce((sum, item) => sum + item.totalPrice, 0).toFixed(2)}
                                     </ThemedText>
                                     <ThemedText style={styles.itemsCountFooter}>
-                                        {allItems.length} items • {new Set(allItems.map(item => item.orderId)).size} orders
+                                        {allItems.length} unique items • {allItems.reduce((sum, item) => sum + item.quantity, 0)} total servings
                                     </ThemedText>
                                 </ThemedView>
                             </ThemedView>
@@ -1250,6 +1687,27 @@ const styles = StyleSheet.create({
         fontSize: 8,
         fontWeight: 'bold',
     },
+    notesTag: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#FFF3E0',
+        paddingHorizontal: 6,
+        paddingVertical: 3,
+        borderRadius: 4,
+        alignSelf: 'flex-start',
+        marginBottom: 4,
+        gap: 4,
+        borderWidth: 1,
+        borderColor: '#D4A574',
+        maxWidth: '100%',
+    },
+    notesTagText: {
+        color: '#874E3B',
+        fontSize: 8,
+        fontWeight: '500',
+        flex: 1,
+        flexWrap: 'wrap',
+    },
     orderDate: {
         fontSize: 10,
         color: '#8B7355',
@@ -1348,7 +1806,8 @@ const styles = StyleSheet.create({
         backgroundColor: 'transparent'
     },
     loadingContainers:{
-        color: '#854442'
+        color: '#854442',
+        marginTop: 10
     },
     emptyContainer: {
         flex: 1,
@@ -1396,7 +1855,7 @@ const styles = StyleSheet.create({
     modalHeaderRight: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 12,
+        gap: 8,
         backgroundColor: 'transparent'
     },
     modalTitleContainer: {
@@ -1496,6 +1955,38 @@ const styles = StyleSheet.create({
         color: '#FFFEEA',
         fontSize: 10,
         fontWeight: 'bold',
+    },
+    modalNotesSection: {
+        marginBottom: 12,
+        backgroundColor: '#FFF3E0',
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#D4A574',
+        overflow: 'hidden',
+    },
+    modalNotesHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        backgroundColor: '#F5E6D3',
+        gap: 6,
+    },
+    modalNotesLabel: {
+        fontSize: 12,
+        fontWeight: 'bold',
+        color: '#874E3B',
+    },
+    modalNotesContent: {
+        paddingHorizontal: 10,
+        paddingVertical: 8,
+        backgroundColor: 'transparent'
+    },
+    modalNotesText: {
+        fontSize: 12,
+        color: '#5A3921',
+        fontStyle: 'italic',
+        lineHeight: 16,
     },
     cupsSection: {
         flexDirection: 'row',
@@ -1655,25 +2146,36 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     itemOrderInfo: {
-        fontSize: 12,
-        color: '#854442',
+        fontSize: 11,
+        color: '#8B7355',
         fontStyle: 'italic',
-        
+        marginTop: 2,
+    },
+    itemDateInfo: {
+        fontSize: 10,
+        color: '#D4A574',
+        marginTop: 2,
     },
     itemPriceSection: {
         alignItems: 'flex-end',
-        minWidth: 80,
+        minWidth: 100,
         backgroundColor: 'transparent'
     },
     itemQuantityModal: {
         fontSize: 16,
         color: '#854442',
-        marginBottom: 4,
+        marginBottom: 2,
+        fontWeight: '600',
     },
     itemPriceModal: {
         fontSize: 18,
         fontWeight: 'bold',
         color: '#854442',
+    },
+    itemUnitPrice: {
+        fontSize: 10,
+        color: '#8B7355',
+        marginTop: 2,
     },
     itemsFooter: {
         padding: 20,
@@ -1697,6 +2199,21 @@ const styles = StyleSheet.create({
         color: '#8B7355',
         textAlign: 'center',
         marginTop: 4,
+    },
+    // Export Items Button Styles
+    exportItemsButton: {
+        width: 40,
+        height: 40,
+        borderRadius: 8,
+        backgroundColor: '#16A34A',
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#16A34A',
+    },
+    exportButtonDisabled: {
+        backgroundColor: '#C4A484',
+        borderColor: '#C4A484',
     },
     closeButton: {
         padding: 4,

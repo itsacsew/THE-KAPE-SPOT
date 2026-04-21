@@ -10,7 +10,7 @@ import {
     Modal,
     Dimensions,
     Text,
-    ActivityIndicator
+    ActivityIndicator,
 } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -53,6 +53,7 @@ interface OrderData {
     orderType?: 'dine-in' | 'take-out';
     cupsUsed?: number;
     allItemsReady?: boolean;
+    notes?: string; // ADDED: notes/comment field
 }
 
 const { width } = Dimensions.get('window');
@@ -129,7 +130,8 @@ export default function OrderStatusScreen() {
                             firebaseId: doc.id,
                             orderType: data.order_type || data.orderType || 'dine-in',
                             cupsUsed: data.cups_used || data.cupsUsed || 0,
-                            allItemsReady: data.allItemsReady || false
+                            allItemsReady: data.allItemsReady || false,
+                            notes: data.notes || '' // ADDED: get notes from Firebase
                         };
 
                         firebaseOrders.push(order);
@@ -216,7 +218,8 @@ export default function OrderStatusScreen() {
                             firebaseId: doc.id,
                             orderType: data.order_type || data.orderType || 'dine-in',
                             cupsUsed: data.cups_used || data.cupsUsed || 0,
-                            allItemsReady: data.allItemsReady || false
+                            allItemsReady: data.allItemsReady || false,
+                            notes: data.notes || '' // ADDED: get notes from Firebase
                         };
                     });
 
@@ -742,9 +745,9 @@ export default function OrderStatusScreen() {
 
     const getOrderTypeColor = (orderType?: string) => {
         switch (orderType) {
-            case 'dine-in': return '#874E3B';
-            case 'take-out': return '#D4A574';
-            default: return '#8B7355';
+            case 'dine-in': return '#854442';
+            case 'take-out': return '#854442';
+            default: return '#854442';
         }
     };
 
@@ -789,17 +792,8 @@ export default function OrderStatusScreen() {
                                 </TouchableOpacity>
                             </ThemedView>
 
-                            <ThemedText style={styles.modeInfo}>
-                                {isOnlineMode ? '🔥 Connected to Firebase - Realtime updates active' : '📱 Using local storage - Showing local data'}
-                                {lastUpdate && (
-                                    <ThemedText style={styles.lastUpdateText}>
-                                        {' '}Last update: {lastUpdate}
-                                    </ThemedText>
-                                )}
-                            </ThemedText>
-
-                            {/* ORDER TYPE FILTERS */}
-                            <ThemedView style={styles.orderTypeFilters}>
+                            {/* ORDER TYPE FILTERS AND TOTAL ORDERS - SINGLE ROW */}
+                            <ThemedView style={styles.filtersRow}>
                                 <TouchableOpacity
                                     style={[
                                         styles.orderTypeFilterButton,
@@ -846,12 +840,12 @@ export default function OrderStatusScreen() {
                                         TAKE OUT
                                     </Text>
                                 </TouchableOpacity>
-                            </ThemedView>
 
-                            <ThemedView style={styles.orderCountContainer}>
-                                <ThemedText style={styles.orderCountText}>
-                                    Total Orders: <Text style={styles.orderCountNumber}>{filteredOrders.length}</Text>
-                                </ThemedText>
+                                <ThemedView style={styles.orderCountBadge}>
+                                    <ThemedText style={styles.orderCountBadgeText}>
+                                        TOTAL: {filteredOrders.length}
+                                    </ThemedText>
+                                </ThemedView>
                             </ThemedView>
                         </ThemedView>
                     </ThemedView>
@@ -866,7 +860,7 @@ export default function OrderStatusScreen() {
                             {loading ? (
                                 <ThemedView style={styles.loadingContainer}>
                                     <ActivityIndicator size="large" color="#874E3B" />
-                                    <ThemedText style={{ marginTop: 10 }}>Loading orders...</ThemedText>
+                                    <ThemedText style={styles.loadingContainer1}>Loading orders...</ThemedText>
                                 </ThemedView>
                             ) : filteredOrders.length === 0 ? (
                                 <ThemedView style={styles.emptyContainer}>
@@ -921,6 +915,16 @@ export default function OrderStatusScreen() {
                                                 {order.orderType === 'take-out' ? 'TAKE OUT' : 'DINE IN'}
                                             </ThemedText>
                                         </ThemedView>
+
+                                        {/* ADDED: Notes Section - Below Order Type */}
+                                        {order.notes && order.notes.trim() !== '' && (
+                                            <ThemedView style={styles.notesContainer}>
+                                                <Feather name="message-square" size={10} color="#874E3B" />
+                                                <ThemedText style={styles.notesText} numberOfLines={2}>
+                                                    {order.notes}
+                                                </ThemedText>
+                                            </ThemedView>
+                                        )}
 
                                         {/* Customer Name and Time - SIDE BY SIDE */}
                                         <ThemedView style={styles.customerTimeRow}>
@@ -990,6 +994,7 @@ export default function OrderStatusScreen() {
                         animationType="slide"
                         transparent={true}
                         onRequestClose={closeActionModal}
+                        statusBarTranslucent={true}
                     >
                         <ThemedView style={styles.modalOverlay}>
                             <ThemedView style={styles.actionModal}>
@@ -1029,6 +1034,21 @@ export default function OrderStatusScreen() {
                                             </ThemedText>
                                         </ThemedView>
                                     </ThemedView>
+
+                                    {/* ADDED: Notes Section in Modal */}
+                                    {selectedOrder?.notes && selectedOrder.notes.trim() !== '' && (
+                                        <ThemedView style={styles.modalNotesSection}>
+                                            <ThemedView style={styles.modalNotesHeader}>
+                                                <Feather name="message-square" size={14} color="#874E3B" />
+                                                <ThemedText style={styles.modalNotesLabel}>Notes / Comment:</ThemedText>
+                                            </ThemedView>
+                                            <ThemedView style={styles.modalNotesContent}>
+                                                <ThemedText style={styles.modalNotesText}>
+                                                    {selectedOrder.notes}
+                                                </ThemedText>
+                                            </ThemedView>
+                                        </ThemedView>
+                                    )}
 
                                     {/* Cups Used Section for Take Out Orders */}
                                     {selectedOrder?.orderType === 'take-out' && selectedOrder.cupsUsed && selectedOrder.cupsUsed > 0 && (
@@ -1190,22 +1210,291 @@ const styles = StyleSheet.create({
         backgroundColor: 'transparent'
     },
     headerSection: {
-        backgroundColor: "#fffecaF2",
+        backgroundColor: 'rgba(223, 204, 175, 0.7)',
         borderRadius: 12,
         padding: 16,
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
     },
     headerTop: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
-        backgroundColor: '#fffecaF2'
+        backgroundColor: 'transparent',
+        marginBottom: 12,
     },
     mainTitle: {
         fontSize: 30,
         color: '#874E3B',
         fontFamily: 'LobsterTwoItalic',
+    },
+    filtersRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 8,
+        flexWrap: 'wrap',
+        backgroundColor: 'transparent'
+    },
+    orderTypeFilters: {
+        flexDirection: 'row',
+        gap: 8,
+        justifyContent: 'center',
+        backgroundColor: '#fffecaF2',
+        marginBottom: 12,
+    },
+    orderTypeFilterButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        borderRadius: 20,
+        borderWidth: 1,
+        borderColor: '#854442',
+        backgroundColor: '#F5E6D3',
+        gap: 6,
+    },
+    orderTypeFilterButtonActive: {
+        backgroundColor: '#854442',
+        borderColor: '#854442',
+    },
+    orderTypeFilterText: {
+        fontSize: 12,
+        fontWeight: 'bold',
+        color: '#854442',
+    },
+    orderTypeFilterTextActive: {
+        color: '#FFFEEA',
+    },
+    orderCountBadge: {
+        paddingHorizontal: 16,
+        paddingVertical: 8,
+        backgroundColor: '#854442',
+        borderRadius: 20,
+        borderWidth: 1,
+        borderColor: '#854442',
+    },
+    orderCountBadgeText: {
+        fontSize: 12,
+        fontWeight: 'bold',
+        color: '#FFFEEA',
+    },
+    orderTypeContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 4,
+        gap: 4,
+        backgroundColor: 'transparent'
+    },
+    orderTypeIconContainer: {
+        width: 16,
+        height: 16,
+        borderRadius: 8,
+        justifyContent: 'center',
+        alignItems: 'center',
+        
+    },
+    orderTypeText: {
+        fontSize: 10,
+        fontWeight: 'bold',
+        color: '#874E3B',
+        backgroundColor: 'transparent'
+    },
+    // ADDED: Notes container styles
+    notesContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#FFF3E0',
+        borderRadius: 8,
+        paddingHorizontal: 6,
+        paddingVertical: 4,
+        marginBottom: 6,
+        gap: 4,
+        borderWidth: 1,
+        borderColor: '#D4A574',
+    },
+    notesText: {
+        fontSize: 9,
+        color: '#874E3B',
+        flex: 1,
+        fontStyle: 'italic',
+    },
+    // ADDED: Modal notes section styles
+    modalNotesSection: {
+        marginBottom: 12,
+        backgroundColor: '#FFF3E0',
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#D4A574',
+        overflow: 'hidden',
+    },
+    modalNotesHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        backgroundColor: '#F5E6D3',
+        gap: 6,
+    },
+    modalNotesLabel: {
+        fontSize: 12,
+        fontWeight: 'bold',
+        color: '#874E3B',
+    },
+    modalNotesContent: {
+        paddingHorizontal: 10,
+        paddingVertical: 8,
+        backgroundColor: 'transparent'
+    },
+    modalNotesText: {
+        fontSize: 12,
+        color: '#5A3921',
+        fontStyle: 'italic',
+        lineHeight: 16,
+    },
+    cupsUsedContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginBottom: 4,
+        gap: 4,
+        backgroundColor: 'transparent'
+    },
+    cupsUsedText: {
+        fontSize: 9,
+        color: '#874E3B',
+        fontWeight: '500',
+    },
+    orderNumberContainer: {
+        position: 'absolute',
+        top: -5,
+        left: -5,
+        backgroundColor: '#874E3B',
+        width: 28,
+        height: 28,
+        borderRadius: 10,
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#FFFEEA',
+        zIndex: 1,
+    },
+    orderNumberText: {
+        color: '#FFFEEA',
+        fontSize: 12,
+        fontWeight: 'bold',
+    },
+    orderCountContainer: {
+        alignSelf: 'flex-end',
+        marginTop: 8,
+        paddingHorizontal: 12,
+        paddingVertical: 4,
+        backgroundColor: '#F5E6D3',
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#854442',
+    },
+    orderCountText: {
+        fontSize: 12,
+        color: '#874E3B',
+        fontWeight: '600',
+    },
+    orderCountNumber: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#5A3921',
+    },
+    checkboxContainer: {
+        padding: 4,
+    },
+    checkbox: {
+        width: 20,
+        height: 20,
+        borderRadius: 4,
+        borderWidth: 2,
+        borderColor: '#854442',
+        backgroundColor: 'transparent',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    checkboxChecked: {
+        backgroundColor: '#16A34A',
+        borderColor: '#16A34A',
+    },
+    markAllButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        backgroundColor: '#874E3B',
+        borderRadius: 8,
+        gap: 4,
+    },
+    markAllButtonText: {
+        color: '#FFFEEA',
+        fontSize: 12,
+        fontWeight: 'bold',
+    },
+    readyProgressContainer: {
+        marginBottom: 4,
+        backgroundColor: "#fffecaF2",
+        borderWidth: 1,
+        borderColor: '#854442',
+        borderRadius: 12,
+        padding: 4,
+    },
+    readyProgressText: {
+        fontSize: 10,
+        color: '#874E3B',
+        fontWeight: '500',
+        textAlign: 'center',
+    },
+    readyProgressModal: {
+        marginBottom: 16,
+        padding: 12,
+        backgroundColor: '#F5E6D3',
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#854442',
+    },
+    readyProgressLabel: {
+        fontSize: 14,
+        color: '#874E3B',
+        fontWeight: '600',
+        marginBottom: 8,
+    },
+    progressBarContainer: {
+        height: 8,
+        backgroundColor: '#E8D8C8',
+        borderRadius: 4,
+        overflow: 'hidden',
+        marginBottom: 8,
+    },
+    progressBar: {
+        height: '100%',
+        backgroundColor: '#16A34A',
+        borderRadius: 4,
+    },
+    readyProgressCount: {
+        fontSize: 12,
+        color: '#5A3921',
+        textAlign: 'center',
+    },
+    cancelItemButton: {
+        padding: 4,
+        marginLeft: 8,
+    },
+    quantityActions: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: 'transparent'
+    },
+    disabledButton: {
+        backgroundColor: '#9CA3AF',
+        borderColor: '#6B7280',
+    },
+    disabledButtonText: {
+        color: '#E5E7EB',
     },
     modeInfo: {
         fontSize: 12,
@@ -1224,19 +1513,17 @@ const styles = StyleSheet.create({
         backgroundColor: "rgba(255, 254, 234, 0.85)",
         borderRadius: 12,
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
         padding: 12,
     },
     scrollView: {
         flex: 1,
     },
-    // UPDATED: Orders grid with 2 columns
     ordersGrid: {
         flexDirection: 'row',
         flexWrap: 'wrap',
         justifyContent: 'space-between',
     },
-    // UPDATED: Order card for 2 columns layout
     orderCard: {
         width: CARD_WIDTH,
         marginBottom: CARD_MARGIN,
@@ -1244,7 +1531,7 @@ const styles = StyleSheet.create({
         borderRadius: 12,
         padding: 12,
         borderWidth: 2,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
         shadowColor: '#000',
         shadowOffset: {
             width: 0,
@@ -1288,7 +1575,7 @@ const styles = StyleSheet.create({
         backgroundColor: '#fffecaF2',
         borderRadius: 10,
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
         paddingHorizontal: 6,
         paddingVertical: 4,
     },
@@ -1309,7 +1596,7 @@ const styles = StyleSheet.create({
         marginBottom: 6,
         backgroundColor: "#fffecaF2",
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
         borderRadius: 12,
         padding: 6,
         minHeight: 45,
@@ -1336,6 +1623,7 @@ const styles = StyleSheet.create({
         paddingTop: 4,
         borderTopWidth: 1,
         borderTopColor: '#E8D8C8',
+        backgroundColor: 'transparent'
     },
     totalLabel: {
         fontSize: 12,
@@ -1364,6 +1652,11 @@ const styles = StyleSheet.create({
         padding: 20,
         alignItems: 'center',
         width: '100%',
+        backgroundColor: 'transparent'
+    },
+    loadingContainer1:{
+        color:'#874E3B',
+        marginTop: 10
     },
     emptyContainer: {
         flex: 1,
@@ -1371,11 +1664,16 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         paddingVertical: 60,
         width: '100%',
+        backgroundColor: '#F5E6D3',
+        borderRadius: 16,
+        borderWidth: 2,
+        borderColor: '#854442',
     },
     emptyText: {
         fontSize: 16,
         color: '#874E3B',
         marginTop: 12,
+        textAlign: 'center',
     },
     emptySubtext: {
         fontSize: 12,
@@ -1391,7 +1689,7 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
     },
     modalOverlay: {
         flex: 1,
@@ -1406,7 +1704,7 @@ const styles = StyleSheet.create({
         backgroundColor: '#FFFEEA',
         borderRadius: 16,
         borderWidth: 2,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
         overflow: 'hidden',
     },
     modalHeader: {
@@ -1416,7 +1714,7 @@ const styles = StyleSheet.create({
         padding: 20,
         backgroundColor: '#F5E6D3',
         borderBottomWidth: 1,
-        borderBottomColor: '#D4A574',
+        borderBottomColor: '#854442',
     },
     modalTitleContainer: {
         flexDirection: 'row',
@@ -1424,6 +1722,7 @@ const styles = StyleSheet.create({
         flex: 1,
         flexWrap: 'wrap',
         gap: 8,
+        backgroundColor: 'transparent'
     },
     modalTitle: {
         fontSize: 16,
@@ -1446,6 +1745,7 @@ const styles = StyleSheet.create({
     },
     modalContent: {
         padding: 20,
+        backgroundColor: 'transparent'
     },
     customerTimeRowModal: {
         flexDirection: 'row',
@@ -1453,9 +1753,11 @@ const styles = StyleSheet.create({
         alignItems: 'flex-start',
         marginBottom: 16,
         gap: 16,
+        backgroundColor: 'transparent'
     },
     customerSection: {
         flex: 1,
+        backgroundColor: 'transparent'
     },
     customerLabel: {
         fontSize: 14,
@@ -1469,6 +1771,7 @@ const styles = StyleSheet.create({
     },
     timeSection: {
         flex: 1,
+        backgroundColor: 'transparent'
     },
     timeLabel: {
         fontSize: 14,
@@ -1482,6 +1785,7 @@ const styles = StyleSheet.create({
     },
     cupsSection: {
         marginBottom: 16,
+        backgroundColor: 'transparent'
     },
     cupsLabel: {
         fontSize: 14,
@@ -1495,12 +1799,14 @@ const styles = StyleSheet.create({
     },
     itemsSection: {
         marginBottom: 20,
+        backgroundColor: 'transparent'
     },
     itemsHeader: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
         marginBottom: 8,
+        backgroundColor: 'transparent'
     },
     itemsLabel: {
         fontSize: 14,
@@ -1513,6 +1819,7 @@ const styles = StyleSheet.create({
         paddingVertical: 6,
         borderBottomWidth: 1,
         borderBottomColor: '#E8D8C8',
+        backgroundColor: 'transparent'
     },
     itemName: {
         fontSize: 14,
@@ -1522,6 +1829,7 @@ const styles = StyleSheet.create({
     },
     itemsScrollView: {
         maxHeight: 200,
+        backgroundColor: 'transparent'
     },
     itemNameReady: {
         textDecorationLine: 'line-through',
@@ -1552,8 +1860,9 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         paddingVertical: 16,
         borderTopWidth: 2,
-        borderTopColor: '#D4A574',
+        borderTopColor: '#854442',
         marginBottom: 20,
+        backgroundColor: 'transparent'
     },
     totalLabelModal: {
         fontSize: 16,
@@ -1569,6 +1878,7 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         justifyContent: 'space-between',
         gap: 12,
+        backgroundColor: 'transparent'
     },
     actionButtonModal: {
         flex: 1,
@@ -1590,195 +1900,5 @@ const styles = StyleSheet.create({
         fontSize: 14,
         fontWeight: 'bold',
         textAlign: 'center',
-    },
-    orderTypeFilters: {
-        flexDirection: 'row',
-        gap: 8,
-        justifyContent: 'center',
-        backgroundColor: '#fffecaF2',
-        marginBottom: 12,
-    },
-    orderTypeFilterButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-        borderRadius: 20,
-        borderWidth: 1,
-        borderColor: '#D4A574',
-        backgroundColor: '#F5E6D3',
-        gap: 6,
-    },
-    orderTypeFilterButtonActive: {
-        backgroundColor: '#874E3B',
-        borderColor: '#874E3B',
-    },
-    orderTypeFilterText: {
-        fontSize: 12,
-        fontWeight: 'bold',
-        color: '#874E3B',
-    },
-    orderTypeFilterTextActive: {
-        color: '#FFFEEA',
-    },
-    orderTypeContainer: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginBottom: 4,
-        gap: 4,
-    },
-    orderTypeIconContainer: {
-        width: 16,
-        height: 16,
-        borderRadius: 8,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    orderTypeText: {
-        fontSize: 10,
-        fontWeight: 'bold',
-        color: '#874E3B',
-    },
-    cupsUsedContainer: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginBottom: 4,
-        gap: 4,
-    },
-    cupsUsedText: {
-        fontSize: 9,
-        color: '#874E3B',
-        fontWeight: '500',
-    },
-    orderNumberContainer: {
-        position: 'absolute',
-        top: -5,
-        left: -5,
-        backgroundColor: '#874E3B',
-        width: 28,
-        height: 28,
-        borderRadius: 10,
-        justifyContent: 'center',
-        alignItems: 'center',
-        borderWidth: 1,
-        borderColor: '#FFFEEA',
-        zIndex: 1,
-    },
-    orderNumberText: {
-        color: '#FFFEEA',
-        fontSize: 12,
-        fontWeight: 'bold',
-    },
-    orderCountContainer: {
-        alignSelf: 'flex-end',
-        marginTop: 8,
-        paddingHorizontal: 12,
-        paddingVertical: 4,
-        backgroundColor: '#F5E6D3',
-        borderRadius: 8,
-        borderWidth: 1,
-        borderColor: '#D4A574',
-    },
-    orderCountText: {
-        fontSize: 12,
-        color: '#874E3B',
-        fontWeight: '600',
-    },
-    orderCountNumber: {
-        fontSize: 16,
-        fontWeight: 'bold',
-        color: '#5A3921',
-    },
-    checkboxContainer: {
-        padding: 4,
-    },
-    checkbox: {
-        width: 20,
-        height: 20,
-        borderRadius: 4,
-        borderWidth: 2,
-        borderColor: '#D4A574',
-        backgroundColor: 'transparent',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    checkboxChecked: {
-        backgroundColor: '#16A34A',
-        borderColor: '#16A34A',
-    },
-    markAllButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingHorizontal: 12,
-        paddingVertical: 6,
-        backgroundColor: '#874E3B',
-        borderRadius: 8,
-        gap: 4,
-    },
-    markAllButtonText: {
-        color: '#FFFEEA',
-        fontSize: 12,
-        fontWeight: 'bold',
-    },
-    readyProgressContainer: {
-        marginBottom: 4,
-        backgroundColor: "#fffecaF2",
-        borderWidth: 1,
-        borderColor: '#D4A574',
-        borderRadius: 12,
-        padding: 4,
-    },
-    readyProgressText: {
-        fontSize: 10,
-        color: '#874E3B',
-        fontWeight: '500',
-        textAlign: 'center',
-    },
-    readyProgressModal: {
-        marginBottom: 16,
-        padding: 12,
-        backgroundColor: '#F5E6D3',
-        borderRadius: 8,
-        borderWidth: 1,
-        borderColor: '#D4A574',
-    },
-    readyProgressLabel: {
-        fontSize: 14,
-        color: '#874E3B',
-        fontWeight: '600',
-        marginBottom: 8,
-    },
-    progressBarContainer: {
-        height: 8,
-        backgroundColor: '#E8D8C8',
-        borderRadius: 4,
-        overflow: 'hidden',
-        marginBottom: 8,
-    },
-    progressBar: {
-        height: '100%',
-        backgroundColor: '#16A34A',
-        borderRadius: 4,
-    },
-    readyProgressCount: {
-        fontSize: 12,
-        color: '#5A3921',
-        textAlign: 'center',
-    },
-    cancelItemButton: {
-        padding: 4,
-        marginLeft: 8,
-    },
-    quantityActions: {
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
-    disabledButton: {
-        backgroundColor: '#9CA3AF',
-        borderColor: '#6B7280',
-    },
-    disabledButtonText: {
-        color: '#E5E7EB',
     },
 });

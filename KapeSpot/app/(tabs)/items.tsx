@@ -184,7 +184,9 @@ export default function ItemsScreen() {
     };
 
     // Available icons for categories
-    const availableIcons = ['folder', 'coffee', 'star', 'shopping-bag', 'package', 'heart', 'bookmark', 'tag'];
+    const availableIcons = ['folder', 'coffee', 'package', 'heart', 'bookmark', 'tag', 'gift',
+        'rose',
+        'menu'];
 
     // Load menu items from Firebase - SEPARATE LOGIC FOR ONLINE vs OFFLINE
     const loadMenuItems = async () => {
@@ -1635,159 +1637,160 @@ export default function ItemsScreen() {
                 resizeMode="cover"
             >
                 <ThemedView style={styles.content}>
-                    {/* Main Content Area - REMOVED SIDEBAR */}
+                    {/* Main Content Area */}
                     <ThemedView style={styles.mainContent}>
                         {/* Header Section */}
                         <ThemedView style={styles.headerSection}>
-                            <ThemedView style={styles.true1}>
+                            <ThemedView style={styles.headerTopRow}>
                                 <ThemedText style={styles.mainTitle}>
                                     {activeSidebar === 'food-items' && 'Food Items'}
                                     {activeSidebar === 'categories' && 'Categories'}
                                     {activeSidebar === 'cups' && 'Cups Management'}
                                 </ThemedText>
-                                <ThemedText style={styles.modeInfo}>
-                                    {isOnlineMode ? 'Connected to server' : 'Using local storage'} |
-                                    Role: {isAdmin ? '👑 ADMIN' : '👤 USER'}
-                                </ThemedText>
+                                
+                                <ThemedView style={styles.headerButtonsRow}>
+                                    {/* Reload button */}
+                                    <TouchableOpacity
+                                        style={styles.reloadButton}
+                                        onPress={() => {
+                                            loadMenuItems();
+                                            loadCategories();
+                                            loadCups();
+                                        }}
+                                    >
+                                        <Feather name="refresh-cw" size={18} color="#874E3B" />
+                                    </TouchableOpacity>
+
+                                    {activeSidebar === 'categories' && isAdmin && (
+                                        <TouchableOpacity style={styles.addNewButton} onPress={openAddCategoryModal}>
+                                            <Feather name="plus" size={16} color="#FFFEEA" />
+                                            <ThemedText style={styles.addNewButtonText}>Add New</ThemedText>
+                                        </TouchableOpacity>
+                                    )}
+
+                                    {activeSidebar === 'food-items' && isAdmin && (
+                                        <TouchableOpacity style={styles.addNewButton} onPress={handleAddNewItem} disabled={loading}>
+                                            <Feather name="plus" size={16} color="#FFFEEA" />
+                                            <ThemedText style={styles.addNewButtonText}>
+                                                {loading ? 'Loading...' : 'Add New'}
+                                            </ThemedText>
+                                        </TouchableOpacity>
+                                    )}
+
+                                    {activeSidebar === 'cups' && isAdmin && (
+                                        <TouchableOpacity style={styles.addNewButton} onPress={openAddCupModal}>
+                                            <Feather name="plus" size={16} color="#FFFEEA" />
+                                            <ThemedText style={styles.addNewButtonText}>Add New</ThemedText>
+                                        </TouchableOpacity>
+                                    )}
+                                </ThemedView>
                             </ThemedView>
 
-                            <ThemedView style={styles.headerActions}>
-                                {/* Reload button */}
-                                <TouchableOpacity
-                                    style={styles.reloadButton}
-                                    onPress={() => {
-                                        loadMenuItems();
-                                        loadCategories();
-                                        loadCups();
-                                    }}
-                                >
-                                    <Feather name="refresh-cw" size={18} color="#874E3B" />
-                                </TouchableOpacity>
-
-                                {activeSidebar === 'categories' && isAdmin && (
-                                    <TouchableOpacity style={styles.addNewButton} onPress={openAddCategoryModal}>
-                                        <Feather name="plus" size={16} color="#FFFEEA" />
-                                        <ThemedText style={styles.addNewButtonText}>Add New</ThemedText>
-                                    </TouchableOpacity>
-                                )}
-
-                                {activeSidebar === 'food-items' && isAdmin && (
-                                    <TouchableOpacity style={styles.addNewButton} onPress={handleAddNewItem} disabled={loading}>
-                                        <Feather name="plus" size={16} color="#FFFEEA" />
-                                        <ThemedText style={styles.addNewButtonText}>
-                                            {loading ? 'Loading...' : 'Add New'}
-                                        </ThemedText>
-                                    </TouchableOpacity>
-                                )}
-
-                                {activeSidebar === 'cups' && isAdmin && (
-                                    <TouchableOpacity style={styles.addNewButton} onPress={openAddCupModal}>
-                                        <Feather name="plus" size={16} color="#FFFEEA" />
-                                        <ThemedText style={styles.addNewButtonText}>Add New</ThemedText>
-                                    </TouchableOpacity>
-                                )}
-
-                                <ThemedView style={styles.searchContainer}>
-                                    <Feather name="search" size={18} color="#874E3B" style={styles.searchIcon} />
-                                    <TextInput
-                                        style={styles.searchInput}
-                                        placeholder={
-                                            activeSidebar === 'food-items' ? "Search Item" :
-                                                activeSidebar === 'categories' ? "Search Category" :
-                                                    "Search Cup"
-                                        }
-                                        value={searchQuery}
-                                        onChangeText={setSearchQuery}
-                                    />
-                                </ThemedView>
+                            {/* Search bar below title and buttons */}
+                            <ThemedView style={styles.searchContainer}>
+                                <Feather name="search" size={18} color="#874E3B" style={styles.searchIcon} />
+                                <TextInput
+                                    style={styles.searchInput}
+                                    placeholder={
+                                        activeSidebar === 'food-items' ? "Search Item" :
+                                            activeSidebar === 'categories' ? "Search Category" :
+                                                "Search Cup"
+                                    }
+                                    value={searchQuery}
+                                    onChangeText={setSearchQuery}
+                                    placeholderTextColor="#854442"
+                                />
                             </ThemedView>
                         </ThemedView>
 
-                        {/* Content based on active sidebar */}
+                        {/* Food Items Table with Horizontal Scroll */}
                         {activeSidebar === 'food-items' && (
                             <ThemedView style={styles.tableSection}>
-                                <ThemedView style={styles.tableHeader}>
-                                    <ThemedText style={[styles.headerText, styles.codeHeader]}>Code</ThemedText>
-                                    <ThemedText style={[styles.headerText, styles.nameHeader]}>Item Name</ThemedText>
-                                    <ThemedText style={[styles.headerText, styles.statusHeader]}>Status</ThemedText>
-                                    <ThemedText style={[styles.headerText, styles.categoryHeader]}>Category</ThemedText>
-                                    <ThemedText style={[styles.headerText, styles.stocksHeader]}>Stocks</ThemedText>
-                                    <ThemedText style={[styles.headerText, styles.priceHeader]}>Price</ThemedText>
-                                    <ThemedText style={[styles.headerText, styles.salesHeader]}>Sales</ThemedText>
-                                    {/* Actions column only for admin */}
-                                    {isAdmin && (
-                                        <ThemedText style={[styles.headerText, styles.actionsHeader]}>Actions</ThemedText>
-                                    )}
-                                </ThemedView>
+                                 <ScrollView 
+            horizontal 
+            showsHorizontalScrollIndicator={true}
+            contentContainerStyle={styles.horizontalScrollContent}
+            overScrollMode="never"
+            decelerationRate="fast"
+            alwaysBounceHorizontal={false}
+            bounces={true}
+            bouncesZoom={false}
+            canCancelContentTouches={true}
+            scrollEventThrottle={16}
+        >
+                                    <ThemedView style={styles.tableContainer}>
+                                        {/* Table Header */}
+                                        <ThemedView style={styles.tableHeader}>
+                                            <ThemedText style={[styles.headerText, styles.codeHeader]}>Code</ThemedText>
+                                            <ThemedText style={[styles.headerText, styles.nameHeader]}>Item Name</ThemedText>
+                                            <ThemedText style={[styles.headerText, styles.categoryHeader]}>Category</ThemedText>
+                                            <ThemedText style={[styles.headerText, styles.stocksHeader]}>Stocks</ThemedText>
+                                            <ThemedText style={[styles.headerText, styles.priceHeader]}>Price</ThemedText>
+                                            <ThemedText style={[styles.headerText, styles.salesHeader]}>Sales</ThemedText>
+                                            {isAdmin && (
+                                                <ThemedText style={[styles.headerText, styles.actionsHeader]}>Actions</ThemedText>
+                                            )}
+                                        </ThemedView>
 
-                                <ScrollView style={styles.tableContent}>
-                                    {loading ? (
-                                        <ThemedView style={styles.loadingContainer}>
-                                            <ThemedText>Loading items...</ThemedText>
-                                        </ThemedView>
-                                    ) : paginatedItems.length === 0 ? (
-                                        <ThemedView style={styles.emptyContainer}>
-                                            <ThemedText>No items found</ThemedText>
-                                        </ThemedView>
-                                    ) : (
-                                        paginatedItems.map((item, index) => (
-                                            <ThemedView key={`${item.id}-${index}`} style={styles.tableRow}>
-                                                <ThemedText style={[styles.cellText, styles.codeCell]}>
-                                                    {item.code}
-                                                </ThemedText>
-                                                <ThemedText style={[styles.cellText, styles.nameCell]}>{item.name}</ThemedText>
-                                                {/* Status cell */}
-                                                <ThemedView style={[styles.statusCell, item.isOffline ? styles.offlineStatus : styles.onlineStatus]}>
-                                                    <ThemedText style={styles.statusText}>
-                                                        {item.isOffline ? '📱 Offline' : '🌐 Online'}
-                                                    </ThemedText>
+                                        {/* Table Body */}
+                                        <ScrollView style={styles.tableBodyScroll}>
+                                            {loading ? (
+                                                <ThemedView style={styles.loadingContainer}>
+                                                    <ThemedText>Loading items...</ThemedText>
                                                 </ThemedView>
-                                                <ThemedText style={[styles.cellText, styles.categoryCell]}>{item.category}</ThemedText>
-                                                <ThemedText style={[styles.cellText, styles.stocksCell]}>{item.stocks}</ThemedText>
-                                                <ThemedText style={[styles.cellText, styles.priceCell]}>₱{item.price.toFixed(2)}</ThemedText>
-                                                <ThemedText style={[styles.cellText, styles.salesCell]}>{item.sales}</ThemedText>
-                                                {/* Actions cell only for admin */}
-                                                {isAdmin && (
-                                                    <ThemedView style={styles.actionsCell}>
-                                                        <TouchableOpacity
-                                                            style={[
-                                                                styles.statusButton,
-                                                                item.status ? styles.statusActive : styles.statusInactive
-                                                            ]}
-                                                            onPress={() => toggleStatus(item.id)}
-                                                        >
-                                                            <Feather
-                                                                name={item.status ? "check" : "x"}
-                                                                size={16}
-                                                                color={item.status ? "#16A34A" : "#DC2626"}
-                                                            />
-                                                        </TouchableOpacity>
-                                                        {/* EDIT BUTTON - Pencil Icon */}
-                                                        <TouchableOpacity
-                                                            style={styles.editButton}
-                                                            onPress={() => openEditItemModal(item)}
-                                                        >
-                                                            <Feather name="edit-2" size={16} color="#874E3B" />
-                                                        </TouchableOpacity>
-                                                        <TouchableOpacity
-                                                            style={styles.deleteButton}
-                                                            onPress={() => deleteItem(item.id)}
-                                                        >
-                                                            <Feather name="trash-2" size={16} color="#DC2626" />
-                                                        </TouchableOpacity>
+                                            ) : paginatedItems.length === 0 ? (
+                                                <ThemedView style={styles.emptyContainer}>
+                                                    <ThemedText>No items found</ThemedText>
+                                                </ThemedView>
+                                            ) : (
+                                                paginatedItems.map((item, index) => (
+                                                    <ThemedView key={`${item.id}-${index}`} style={styles.tableRow}>
+                                                        <ThemedText style={[styles.cellText, styles.codeCell]}>
+                                                            {item.code}
+                                                        </ThemedText>
+                                                        <ThemedText style={[styles.cellText, styles.nameCell]}>{item.name}</ThemedText>
+                                                        <ThemedText style={[styles.cellText, styles.categoryCell]}>{item.category}</ThemedText>
+                                                        <ThemedText style={[styles.cellText, styles.stocksCell]}>{item.stocks}</ThemedText>
+                                                        <ThemedText style={[styles.cellText, styles.priceCell]}>₱{item.price.toFixed(2)}</ThemedText>
+                                                        <ThemedText style={[styles.cellText, styles.salesCell]}>{item.sales}</ThemedText>
+                                                        {isAdmin && (
+                                                            <ThemedView style={styles.actionsCell}>
+                                                                <TouchableOpacity
+                                                                    style={[
+                                                                        styles.statusButton,
+                                                                        item.status ? styles.statusActive : styles.statusInactive
+                                                                    ]}
+                                                                    onPress={() => toggleStatus(item.id)}
+                                                                >
+                                                                    <Feather
+                                                                        name={item.status ? "check" : "x"}
+                                                                        size={16}
+                                                                        color={item.status ? "#16A34A" : "#DC2626"}
+                                                                    />
+                                                                </TouchableOpacity>
+                                                                <TouchableOpacity
+                                                                    style={styles.editButton}
+                                                                    onPress={() => openEditItemModal(item)}
+                                                                >
+                                                                    <Feather name="edit-2" size={16} color="#874E3B" />
+                                                                </TouchableOpacity>
+                                                                <TouchableOpacity
+                                                                    style={styles.deleteButton}
+                                                                    onPress={() => deleteItem(item.id)}
+                                                                >
+                                                                    <Feather name="trash-2" size={16} color="#DC2626" />
+                                                                </TouchableOpacity>
+                                                            </ThemedView>
+                                                        )}
                                                     </ThemedView>
-                                                )}
-                                            </ThemedView>
-                                        ))
-                                    )}
+                                                ))
+                                            )}
+                                        </ScrollView>
+                                    </ThemedView>
                                 </ScrollView>
 
                                 {/* Table Footer with Pagination */}
                                 <ThemedView style={styles.tableFooter}>
-                                    <ThemedText style={styles.footerText}>
-                                        Showing {startIndex + 1} to {Math.min(startIndex + itemsPerPage, filteredItems.length)} of {filteredItems.length} items
-                                    </ThemedText>
-
                                     <ThemedView style={styles.paginationContainer}>
                                         <ThemedView style={styles.itemsPerPage}>
                                             <ThemedText style={styles.paginationText}>Items per page</ThemedText>
@@ -1806,30 +1809,53 @@ export default function ItemsScreen() {
                                                 <Feather name="chevron-left" size={16} color={currentPage === 1 ? "#9CA3AF" : "#874E3B"} />
                                             </TouchableOpacity>
 
-                                            {[...Array(Math.min(3, totalPages))].map((_, index) => {
-                                                const pageNum = index + 1;
+                                            {/* SIMPLE PAGINATION: Shows current page and next page only */}
+                                            {(() => {
+                                                // Calculate the starting page number for the pair
+                                                let firstPage, secondPage;
+                                                
+                                                if (currentPage % 2 === 1) {
+                                                    // Odd page: show current and current+1
+                                                    firstPage = currentPage;
+                                                    secondPage = currentPage + 1;
+                                                } else {
+                                                    // Even page: show current-1 and current
+                                                    firstPage = currentPage - 1;
+                                                    secondPage = currentPage;
+                                                }
+                                                
+                                                // Don't show if exceeds total pages
+                                                const pageNumbers = [];
+                                                if (firstPage <= totalPages) pageNumbers.push(firstPage);
+                                                if (secondPage <= totalPages) pageNumbers.push(secondPage);
+                                                
                                                 return (
-                                                    <TouchableOpacity
-                                                        key={pageNum}
-                                                        style={[
-                                                            styles.pageNumber,
-                                                            currentPage === pageNum && styles.pageNumberActive
-                                                        ]}
-                                                        onPress={() => setCurrentPage(pageNum)}
-                                                    >
-                                                        <ThemedText style={[
-                                                            styles.pageNumberText,
-                                                            currentPage === pageNum && styles.pageNumberTextActive
-                                                        ]}>
-                                                            {pageNum}
-                                                        </ThemedText>
-                                                    </TouchableOpacity>
+                                                    <>
+                                                        {pageNumbers.map((pageNum) => (
+                                                            <TouchableOpacity
+                                                                key={pageNum}
+                                                                style={[
+                                                                    styles.pageNumber,
+                                                                    currentPage === pageNum && styles.pageNumberActive
+                                                                ]}
+                                                                onPress={() => setCurrentPage(pageNum)}
+                                                            >
+                                                                <ThemedText style={[
+                                                                    styles.pageNumberText,
+                                                                    currentPage === pageNum && styles.pageNumberTextActive
+                                                                ]}>
+                                                                    {pageNum}
+                                                                </ThemedText>
+                                                            </TouchableOpacity>
+                                                        ))}
+                                                        
+                                                        {/* Always show ellipsis if there are more pages */}
+                                                        {secondPage < totalPages && (
+                                                            <ThemedText style={styles.pageDots}>...</ThemedText>
+                                                        )}
+                                                    </>
                                                 );
-                                            })}
-
-                                            {totalPages > 3 && (
-                                                <ThemedText style={styles.pageDots}>...</ThemedText>
-                                            )}
+                                            })()}
 
                                             <TouchableOpacity
                                                 style={[styles.pageButton, currentPage === totalPages && styles.pageButtonDisabled]}
@@ -1844,143 +1870,174 @@ export default function ItemsScreen() {
                             </ThemedView>
                         )}
 
-                        {/* Categories Table */}
+                        {/* Categories Table with Horizontal Scroll */}
                         {activeSidebar === 'categories' && (
                             <ThemedView style={styles.tableSection}>
-                                <ThemedView style={styles.tableHeader}>
-                                    <ThemedText style={[styles.headerText, styles.categoryIconHeader]}>Icon</ThemedText>
-                                    <ThemedText style={[styles.headerText, styles.categoryNameHeader]}>Category Name</ThemedText>
-                                    <ThemedText style={[styles.headerText, styles.categoryItemsHeader]}>Items in Category</ThemedText>
-                                    <ThemedText style={[styles.headerText, styles.categoryDateHeader]}>Created on</ThemedText>
-                                    {/* Actions column only for admin */}
-                                    {isAdmin && (
-                                        <ThemedText style={[styles.headerText, styles.categoryActionsHeader]}>Actions</ThemedText>
-                                    )}
-                                </ThemedView>
+                                <ScrollView 
+            horizontal 
+            showsHorizontalScrollIndicator={true}
+            contentContainerStyle={styles.horizontalScrollContent}
+            overScrollMode="never"
+            decelerationRate="fast"
+            alwaysBounceHorizontal={false}
+            bounces={true}
+            bouncesZoom={false}
+            canCancelContentTouches={true}
+            scrollEventThrottle={16}
+        >
+                                    <ThemedView style={styles.tableContainer}>
+                                        {/* Table Header */}
+                                        <ThemedView style={styles.tableHeader}>
+                                            <ThemedText style={[styles.headerText, styles.categoryIconHeader]}>Icon</ThemedText>
+                                            <ThemedText style={[styles.headerText, styles.categoryNameHeader]}>Category Name</ThemedText>
+                                            <ThemedText style={[styles.headerText, styles.categoryItemsHeader]}>Items in Category</ThemedText>
+                                            <ThemedText style={[styles.headerText, styles.categoryDateHeader]}>Created on</ThemedText>
+                                            {isAdmin && (
+                                                <ThemedText style={[styles.headerText, styles.categoryActionsHeader]}>Actions</ThemedText>
+                                            )}
+                                        </ThemedView>
 
-                                <ScrollView style={styles.tableContent}>
-                                    {categoriesLoading ? (
-                                        <ThemedView style={styles.loadingContainer}>
-                                            <ThemedText>Loading categories...</ThemedText>
-                                        </ThemedView>
-                                    ) : filteredCategories.length === 0 ? (
-                                        <ThemedView style={styles.emptyContainer}>
-                                            <ThemedText>No categories found</ThemedText>
-                                        </ThemedView>
-                                    ) : (
-                                        filteredCategories.map((category, index) => (
-                                            <ThemedView key={`${category.id}-${index}`} style={styles.tableRow}>
-                                                <ThemedView style={[styles.categoryIconCell]}>
-                                                    <Feather
-                                                        name={(category.icon || 'folder') as any}
-                                                        size={20}
-                                                        color="#874E3B"
-                                                    />
+                                        {/* Table Body */}
+                                        <ScrollView style={styles.tableBodyScroll}>
+                                            {categoriesLoading ? (
+                                                <ThemedView style={styles.loadingContainer}>
+                                                    <ThemedText>Loading categories...</ThemedText>
                                                 </ThemedView>
-                                                <ThemedText style={[styles.cellText, styles.categoryNameCell]}>
-                                                    {category.name} {category.isOffline && '📱'}
-                                                </ThemedText>
-                                                <ThemedText style={[styles.cellText, styles.categoryItemsCell]}>
-                                                    {category.items_count}
-                                                </ThemedText>
-                                                <ThemedText style={[styles.cellText, styles.categoryDateCell]}>
-                                                    {category.created_on}
-                                                </ThemedText>
-                                                {/* Actions cell only for admin */}
-                                                {isAdmin && (
-                                                    <ThemedView style={styles.categoryActionsCell}>
-                                                        <TouchableOpacity
-                                                            style={styles.editButton}
-                                                            onPress={() => openEditCategoryModal(category)}
-                                                        >
-                                                            <Feather name="edit-2" size={16} color="#874E3B" />
-                                                        </TouchableOpacity>
-                                                        <TouchableOpacity
-                                                            style={styles.deleteButton}
-                                                            onPress={() => deleteCategory(category.id)}
-                                                        >
-                                                            <Feather name="trash-2" size={16} color="#DC2626" />
-                                                        </TouchableOpacity>
-                                                        <ThemedView style={[
-                                                            styles.checkIndicator,
-                                                            category.isOffline ? styles.offlineCheck : styles.onlineCheck
-                                                        ]}>
+                                            ) : filteredCategories.length === 0 ? (
+                                                <ThemedView style={styles.emptyContainer}>
+                                                    <ThemedText>No categories found</ThemedText>
+                                                </ThemedView>
+                                            ) : (
+                                                filteredCategories.map((category, index) => (
+                                                    <ThemedView key={`${category.id}-${index}`} style={styles.tableRow}>
+                                                        <ThemedView style={[styles.categoryIconCell]}>
                                                             <Feather
-                                                                name="check"
-                                                                size={14}
-                                                                color={category.isOffline ? "#666" : "#0084FF"}
+                                                                name={(category.icon || 'folder') as any}
+                                                                size={20}
+                                                                color="#874E3B"
                                                             />
                                                         </ThemedView>
+                                                        <ThemedText style={[styles.cellText, styles.categoryNameCell]}>
+                                                            {category.name} {category.isOffline && '📱'}
+                                                        </ThemedText>
+                                                        <ThemedText style={[styles.cellText, styles.categoryItemsCell]}>
+                                                            {category.items_count}
+                                                        </ThemedText>
+                                                        <ThemedText style={[styles.cellText, styles.categoryDateCell]}>
+                                                            {category.created_on}
+                                                        </ThemedText>
+                                                        {isAdmin && (
+                                                            <ThemedView style={styles.categoryActionsCell}>
+                                                                <TouchableOpacity
+                                                                    style={styles.editButton}
+                                                                    onPress={() => openEditCategoryModal(category)}
+                                                                >
+                                                                    <Feather name="edit-2" size={16} color="#874E3B" />
+                                                                </TouchableOpacity>
+                                                                <TouchableOpacity
+                                                                    style={styles.deleteButton}
+                                                                    onPress={() => deleteCategory(category.id)}
+                                                                >
+                                                                    <Feather name="trash-2" size={16} color="#DC2626" />
+                                                                </TouchableOpacity>
+                                                                <ThemedView style={[
+                                                                    styles.checkIndicator,
+                                                                    category.isOffline ? styles.offlineCheck : styles.onlineCheck
+                                                                ]}>
+                                                                    <Feather
+                                                                        name="check"
+                                                                        size={14}
+                                                                        color={category.isOffline ? "#666" : "#0084FF"}
+                                                                    />
+                                                                </ThemedView>
+                                                            </ThemedView>
+                                                        )}
                                                     </ThemedView>
-                                                )}
-                                            </ThemedView>
-                                        ))
-                                    )}
+                                                ))
+                                            )}
+                                        </ScrollView>
+                                    </ThemedView>
                                 </ScrollView>
                             </ThemedView>
                         )}
 
+                        {/* Cups Table with Horizontal Scroll */}
                         {activeSidebar === 'cups' && (
                             <ThemedView style={styles.tableSection}>
-                                <ThemedView style={styles.tableHeader}>
-                                    <ThemedText style={[styles.headerText, styles.cupNameHeader]}>Cup Name</ThemedText>
-                                    <ThemedText style={[styles.headerText, styles.cupSizeHeader]}>Size</ThemedText>
-                                    <ThemedText style={[styles.headerText, styles.cupStocksHeader]}>Stocks</ThemedText>
-                                    {/* Actions column only for admin */}
-                                    {isAdmin && (
-                                        <ThemedText style={[styles.headerText, styles.cupActionsHeader]}>Actions</ThemedText>
-                                    )}
-                                </ThemedView>
+                                <ScrollView 
+            horizontal 
+            showsHorizontalScrollIndicator={true}
+            contentContainerStyle={styles.horizontalScrollContent}
+            overScrollMode="never"
+            decelerationRate="fast"
+            alwaysBounceHorizontal={false}
+            bounces={true}
+            bouncesZoom={false}
+            canCancelContentTouches={true}
+            scrollEventThrottle={16}
+        >
+                                    <ThemedView style={styles.tableContainer}>
+                                        {/* Table Header */}
+                                        <ThemedView style={styles.tableHeader}>
+                                            <ThemedText style={[styles.headerText, styles.cupNameHeader]}>Cup Name</ThemedText>
+                                            <ThemedText style={[styles.headerText, styles.cupSizeHeader]}>Size</ThemedText>
+                                            <ThemedText style={[styles.headerText, styles.cupStocksHeader]}>Stocks</ThemedText>
+                                            {isAdmin && (
+                                                <ThemedText style={[styles.headerText, styles.cupActionsHeader]}>Actions</ThemedText>
+                                            )}
+                                        </ThemedView>
 
-                                <ScrollView style={styles.tableContent}>
-                                    {cupsLoading ? (
-                                        <ThemedView style={styles.loadingContainer}>
-                                            <ThemedText>Loading cups...</ThemedText>
-                                        </ThemedView>
-                                    ) : cupItems.length === 0 ? (
-                                        <ThemedView style={styles.emptyContainer}>
-                                            <ThemedText>No cups found</ThemedText>
-                                        </ThemedView>
-                                    ) : (
-                                        cupItems.map((cup, index) => (
-                                            <ThemedView key={`${cup.id}-${index}`} style={styles.tableRow}>
-                                                <ThemedText style={[styles.cellText, styles.cupNameCell]}>
-                                                    {cup.name} {cup.isOffline && '📱'}
-                                                </ThemedText>
-                                                <ThemedText style={[styles.cellText, styles.cupSizeCell]}>{cup.size || 'N/A'}</ThemedText>
-                                                <ThemedText style={[styles.cellText, styles.cupStocksCell]}>{cup.stocks}</ThemedText>
-                                                {/* Actions cell only for admin */}
-                                                {isAdmin && (
-                                                    <ThemedView style={styles.cupActionsCell}>
-                                                        <TouchableOpacity
-                                                            style={styles.editButton}
-                                                            onPress={() => openEditCupModal(cup)}
-                                                        >
-                                                            <Feather name="edit-2" size={16} color="#874E3B" />
-                                                        </TouchableOpacity>
-                                                        <TouchableOpacity
-                                                            style={styles.deleteButton}
-                                                            onPress={() => deleteCup(cup.id)}
-                                                        >
-                                                            <Feather name="trash-2" size={16} color="#DC2626" />
-                                                        </TouchableOpacity>
-                                                        <TouchableOpacity
-                                                            style={styles.addStockButton}
-                                                            onPress={() => updateCupStocks(cup.id, cup.stocks + 10)}
-                                                        >
-                                                            <Feather name="plus" size={16} color="#16A34A" />
-                                                        </TouchableOpacity>
-                                                        <TouchableOpacity
-                                                            style={styles.removeStockButton}
-                                                            onPress={() => updateCupStocks(cup.id, Math.max(0, cup.stocks - 10))}
-                                                        >
-                                                            <Feather name="minus" size={16} color="#DC2626" />
-                                                        </TouchableOpacity>
+                                        {/* Table Body */}
+                                        <ScrollView style={styles.tableBodyScroll}>
+                                            {cupsLoading ? (
+                                                <ThemedView style={styles.loadingContainer}>
+                                                    <ThemedText>Loading cups...</ThemedText>
+                                                </ThemedView>
+                                            ) : cupItems.length === 0 ? (
+                                                <ThemedView style={styles.emptyContainer}>
+                                                    <ThemedText>No cups found</ThemedText>
+                                                </ThemedView>
+                                            ) : (
+                                                cupItems.map((cup, index) => (
+                                                    <ThemedView key={`${cup.id}-${index}`} style={styles.tableRow}>
+                                                        <ThemedText style={[styles.cellText, styles.cupNameCell]}>
+                                                            {cup.name} {cup.isOffline && '📱'}
+                                                        </ThemedText>
+                                                        <ThemedText style={[styles.cellText, styles.cupSizeCell]}>{cup.size || 'N/A'}</ThemedText>
+                                                        <ThemedText style={[styles.cellText, styles.cupStocksCell]}>{cup.stocks}</ThemedText>
+                                                        {isAdmin && (
+                                                            <ThemedView style={styles.cupActionsCell}>
+                                                                <TouchableOpacity
+                                                                    style={styles.editButton}
+                                                                    onPress={() => openEditCupModal(cup)}
+                                                                >
+                                                                    <Feather name="edit-2" size={16} color="#874E3B" />
+                                                                </TouchableOpacity>
+                                                                <TouchableOpacity
+                                                                    style={styles.deleteButton}
+                                                                    onPress={() => deleteCup(cup.id)}
+                                                                >
+                                                                    <Feather name="trash-2" size={16} color="#DC2626" />
+                                                                </TouchableOpacity>
+                                                                <TouchableOpacity
+                                                                    style={styles.addStockButton}
+                                                                    onPress={() => updateCupStocks(cup.id, cup.stocks + 10)}
+                                                                >
+                                                                    <Feather name="plus" size={16} color="#16A34A" />
+                                                                </TouchableOpacity>
+                                                                <TouchableOpacity
+                                                                    style={styles.removeStockButton}
+                                                                    onPress={() => updateCupStocks(cup.id, Math.max(0, cup.stocks - 10))}
+                                                                >
+                                                                    <Feather name="minus" size={16} color="#DC2626" />
+                                                                </TouchableOpacity>
+                                                            </ThemedView>
+                                                        )}
                                                     </ThemedView>
-                                                )}
-                                            </ThemedView>
-                                        ))
-                                    )}
+                                                ))
+                                            )}
+                                        </ScrollView>
+                                    </ThemedView>
                                 </ScrollView>
                             </ThemedView>
                         )}
@@ -2032,6 +2089,7 @@ export default function ItemsScreen() {
                     animationType="slide"
                     transparent={true}
                     onRequestClose={closeCategoryModal}
+                    statusBarTranslucent={true}
                 >
                     <ThemedView style={styles.modalOverlay}>
                         <ThemedView style={styles.modalContainer}>
@@ -2094,7 +2152,7 @@ export default function ItemsScreen() {
                                                     <Feather
                                                         name={icon as any}
                                                         size={20}
-                                                        color={categoryIcon === icon ? "#FFFEEA" : "#874E3B"}
+                                                        color={categoryIcon === icon ? "#FFFEEA" : "#854442"}
                                                     />
                                                     <ThemedText style={[
                                                         styles.iconText,
@@ -2362,7 +2420,7 @@ export default function ItemsScreen() {
     );
 }
 
-// Styles remain exactly the same as in your original file...
+// Styles
 const styles = StyleSheet.create({
     container: {
         flex: 1,
@@ -2384,12 +2442,15 @@ const styles = StyleSheet.create({
         marginTop: 4,
         backgroundColor: 'fffecaF2'
     },
+    horizontalScrollContent: {
+        flexGrow: 1,
+    },
     sidebar: {
         width: 200,
         backgroundColor: "#fffecaF2",
         borderRadius: 12,
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
         marginRight: 16,
         paddingVertical: 16,
     },
@@ -2429,43 +2490,77 @@ const styles = StyleSheet.create({
     mainContent: {
         flex: 1,
         borderRadius: 12,
+        backgroundColor: 'transparent'
     },
     headerSection: {
-        backgroundColor: "#fffecaF2",
+        backgroundColor: "rgba(223, 204, 175, 0.7)",
         borderRadius: 12,
-        padding: 5,
+        padding: 12,
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
         marginBottom: 10,
+    },
+    headerTopRow: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
+        marginBottom: 12,
+        backgroundColor: 'transparent',
+    },
+    headerButtonsRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+        backgroundColor: "transparent",
     },
     mainTitle: {
         fontSize: 28,
-        color: '#874E3B',
+        color: '#854442',
         fontFamily: 'LobsterTwoItalic',
-        backgroundColor: '#fffecaF2'
+        backgroundColor: 'transparent',
     },
-    headerActions: {
+    searchContainer: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 16,
-        backgroundColor: "#fffecaF2",
+        backgroundColor: 'rgba(255, 254, 234, 0.95)',
+        borderWidth: 1,
+        borderColor: '#854442',
+        borderRadius: 8,
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        width: '100%',
+    },
+    searchIcon: {
+        marginRight: 8,
+    },
+    searchInput: {
+        flex: 1,
+        fontSize: 14,
+        color: '#5A3921',
     },
     addNewButton: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: '#874E3B',
-        paddingHorizontal: 16,
-        paddingVertical: 10,
+        backgroundColor: '#854442',
+        paddingHorizontal: 12,
+        paddingVertical: 8,
         borderRadius: 8,
-        gap: 8,
+        gap: 6,
     },
     addNewButtonText: {
         color: '#FFFEEA',
         fontSize: 14,
         fontWeight: 'bold',
+    },
+    reloadButton: {
+        width: 38,
+        height: 38,
+        borderRadius: 8,
+        backgroundColor: '#F5E6D3',
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#854442',
     },
     statusHeader: {
         flex: 1,
@@ -2494,141 +2589,34 @@ const styles = StyleSheet.create({
         fontWeight: 'bold',
         textAlign: 'center',
     },
-    searchContainer: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: 'rgba(255, 254, 234, 0.95)',
-        borderWidth: 1,
-        borderColor: '#D4A574',
-        borderRadius: 8,
-        paddingHorizontal: 12,
-        paddingVertical: 2,
-        minWidth: 250,
-    },
-    searchIcon: {
-        marginRight: 8,
-    },
-    searchInput: {
-        flex: 1,
-        fontSize: 14,
-        color: '#5A3921',
-    },
     tableSection: {
         flex: 1,
-        backgroundColor: "#fffecaF2",
+        backgroundColor: "rgba(223, 204, 175, 0.7)",
         borderRadius: 12,
         borderWidth: 1,
         borderBottomLeftRadius: 12,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
         overflow: 'hidden',
+    },
+    tableContainer: {
+        minWidth: 80,
+        backgroundColor: 'rgba(223, 204, 175, 0.7)'
+    },
+    tableBodyScroll: {
+        maxHeight: 800,
     },
     tableHeader: {
         flexDirection: 'row',
-        backgroundColor: '#874E3B',
+        backgroundColor: '#854442',
         paddingVertical: 12,
         paddingHorizontal: 8,
         borderBottomWidth: 2,
-        borderBottomColor: '#D4A574',
+        borderBottomColor: '#854442',
     },
     headerText: {
         fontWeight: 'bold',
         color: '#FFFEEA',
         fontSize: 14,
-    },
-    codeHeader: {
-        flex: 1.2,
-        textAlign: 'center',
-    },
-    nameHeader: {
-        flex: 2,
-        textAlign: 'left',
-        paddingLeft: 8,
-    },
-    iconText: {
-        fontSize: 10,
-        color: '#874E3B',
-        marginTop: 4,
-        textAlign: 'center',
-    },
-    iconTextSelected: {
-        color: '#FFFEEA',
-    },
-    categoryHeader: {
-        flex: 1.3,
-        textAlign: 'center',
-    },
-    stocksHeader: {
-        flex: 1,
-        textAlign: 'center',
-    },
-    priceHeader: {
-        flex: 1,
-        textAlign: 'center',
-    },
-    salesHeader: {
-        flex: 1,
-        textAlign: 'center',
-    },
-    actionsHeader: {
-        flex: 1.5,
-        textAlign: 'center',
-    },
-    categoryIconHeader: {
-        flex: 0.8,
-        textAlign: 'center',
-    },
-    categoryNameHeader: {
-        flex: 2,
-        textAlign: 'left',
-        paddingLeft: 8,
-    },
-    modalContentScroll: {
-        maxHeight: 400,
-    },
-    modalContent: {
-        padding: 20,
-    },
-    textInput: {
-        backgroundColor: '#FFFFFF',
-        borderWidth: 2,
-        borderColor: '#D4A574',
-        borderRadius: 8,
-        paddingHorizontal: 12,
-        paddingVertical: 12,
-        fontSize: 16,
-        color: '#5A3921',
-    },
-    categoryItemsHeader: {
-        flex: 1.5,
-        textAlign: 'center',
-    },
-    categoryDateHeader: {
-        flex: 2,
-        textAlign: 'center',
-    },
-    categoryActionsHeader: {
-        flex: 1.2,
-        textAlign: 'center',
-    },
-    cupNameHeader: {
-        flex: 2,
-        textAlign: 'left',
-        paddingLeft: 8,
-    },
-    cupSizeHeader: {
-        flex: 1,
-        textAlign: 'center',
-    },
-    cupStocksHeader: {
-        flex: 1,
-        textAlign: 'center',
-    },
-    cupActionsHeader: {
-        flex: 1.5,
-        textAlign: 'center',
-    },
-    tableContent: {
-        flex: 1,
     },
     tableRow: {
         flexDirection: 'row',
@@ -2644,30 +2632,191 @@ const styles = StyleSheet.create({
         color: '#5A3921',
         fontWeight: '500',
     },
+    codeHeader: {
+        width: 100,
+        textAlign: 'center',
+    },
+    nameHeader: {
+        width: 200,
+        textAlign: 'left',
+        paddingLeft: 8,
+    },
+    categoryHeader: {
+        width: 130,
+        textAlign: 'center',
+    },
+    stocksHeader: {
+        width: 80,
+        textAlign: 'center',
+    },
+    priceHeader: {
+        width: 100,
+        textAlign: 'center',
+    },
+    salesHeader: {
+        width: 80,
+        textAlign: 'center',
+    },
+    actionsHeader: {
+        width: 130,
+        textAlign: 'center',
+        
+    },
+    categoryIconHeader: {
+        width: 70,
+        textAlign: 'center',
+        backgroundColor: 'transparent'
+    },
+    categoryNameHeader: {
+        width: 200,
+        textAlign: 'left',
+        paddingLeft: 8,
+    },
+    categoryItemsHeader: {
+        width: 130,
+        textAlign: 'center',
+    },
+    categoryDateHeader: {
+        width: 180,
+        textAlign: 'center',
+    },
+    categoryActionsHeader: {
+        width: 130,
+        textAlign: 'center',
+    },
+    cupNameHeader: {
+        width: 200,
+        textAlign: 'left',
+        paddingLeft: 8,
+    },
+    cupSizeHeader: {
+        width: 100,
+        textAlign: 'center',
+    },
+    cupStocksHeader: {
+        width: 100,
+        textAlign: 'center',
+    },
+    cupActionsHeader: {
+        width: 180,
+        textAlign: 'center',
+        backgroundColor: 'transparent'
+    },
     codeCell: {
-        flex: 1.2,
+        width: 100,
         textAlign: 'center',
         fontWeight: 'bold',
     },
     nameCell: {
-        flex: 2,
+        width: 200,
         textAlign: 'left',
         paddingLeft: 8,
     },
     categoryCell: {
-        flex: 1.3,
+        width: 130,
         textAlign: 'center',
     },
     stocksCell: {
-        flex: 1,
+        width: 80,
         textAlign: 'center',
         fontWeight: 'bold',
     },
     priceCell: {
-        flex: 1,
+        width: 100,
         textAlign: 'center',
         fontWeight: 'bold',
         color: '#874E3B',
+    },
+    salesCell: {
+        width: 80,
+        textAlign: 'center',
+        fontWeight: 'bold',
+    },
+    actionsCell: {
+        width: 130,
+        flexDirection: 'row',
+        justifyContent: 'center',
+        alignItems: 'center',
+        gap: 8,
+        backgroundColor: 'transparent'
+    },
+    categoryIconCell: {
+        width: 70,
+        justifyContent: 'center',
+        alignItems: 'center',
+        backgroundColor: 'transparent'
+    },
+    categoryNameCell: {
+        width: 200,
+        textAlign: 'left',
+        paddingLeft: 8,
+    },
+    categoryItemsCell: {
+        width: 130,
+        textAlign: 'center',
+        fontWeight: 'bold',
+    },
+    categoryDateCell: {
+        width: 180,
+        textAlign: 'center',
+        fontSize: 12,
+    },
+    categoryActionsCell: {
+        width: 130,
+        flexDirection: 'row',
+        justifyContent: 'center',
+        alignItems: 'center',
+        gap: 6,
+        backgroundColor: 'transparent'
+    },
+    cupNameCell: {
+        width: 200,
+        textAlign: 'left',
+        paddingLeft: 8,
+    },
+    cupSizeCell: {
+        width: 100,
+        textAlign: 'center',
+    },
+    cupStocksCell: {
+        width: 100,
+        textAlign: 'center',
+        fontWeight: 'bold',
+        fontSize: 16,
+    },
+    cupActionsCell: {
+        width: 180,
+        flexDirection: 'row',
+        justifyContent: 'center',
+        alignItems: 'center',
+        gap: 6,
+        backgroundColor: 'transparent'
+    },
+    iconText: {
+        fontSize: 10,
+        color: '#874E3B',
+        marginTop: 4,
+        textAlign: 'center',
+    },
+    iconTextSelected: {
+        color: '#FFFEEA',
+    },
+    modalContentScroll: {
+        maxHeight: 400,
+    },
+    modalContent: {
+        padding: 20,
+        backgroundColor: 'transparent'
+    },
+    textInput: {
+        backgroundColor: '#FFFFFF',
+        borderWidth: 2,
+        borderColor: '#854442',
+        borderRadius: 8,
+        paddingHorizontal: 12,
+        paddingVertical: 12,
+        fontSize: 16,
+        color: '#5A3921',
     },
     checkIndicator: {
         width: 15,
@@ -2685,67 +2834,6 @@ const styles = StyleSheet.create({
         backgroundColor: 'rgba(102, 102, 102, 0.1)',
         borderColor: '#666',
     },
-    salesCell: {
-        flex: 1,
-        textAlign: 'center',
-        fontWeight: 'bold',
-    },
-    categoryIconCell: {
-        flex: 0.8,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    categoryNameCell: {
-        flex: 2,
-        textAlign: 'left',
-        paddingLeft: 8,
-    },
-    categoryItemsCell: {
-        flex: 1.5,
-        textAlign: 'center',
-        fontWeight: 'bold',
-    },
-    categoryDateCell: {
-        flex: 2,
-        textAlign: 'center',
-        fontSize: 12,
-    },
-    categoryActionsCell: {
-        flex: 1.2,
-        flexDirection: 'row',
-        justifyContent: 'center',
-        alignItems: 'center',
-        gap: 6,
-    },
-    cupNameCell: {
-        flex: 2,
-        textAlign: 'left',
-        paddingLeft: 8,
-    },
-    cupSizeCell: {
-        flex: 1,
-        textAlign: 'center',
-    },
-    cupStocksCell: {
-        flex: 1,
-        textAlign: 'center',
-        fontWeight: 'bold',
-        fontSize: 16,
-    },
-    actionsCell: {
-        flex: 1.5,
-        flexDirection: 'row',
-        justifyContent: 'center',
-        alignItems: 'center',
-        gap: 8,
-    },
-    cupActionsCell: {
-        flex: 1.5,
-        flexDirection: 'row',
-        justifyContent: 'center',
-        alignItems: 'center',
-        gap: 6,
-    },
     true1: {
         backgroundColor: '#fffecaF2'
     },
@@ -2757,7 +2845,7 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
     },
     statusActive: {
         backgroundColor: '#DCFCE7',
@@ -2767,16 +2855,6 @@ const styles = StyleSheet.create({
         backgroundColor: '#FEE2E2',
         borderColor: '#DC2626',
     },
-    reloadButton: {
-        width: 40,
-        height: 40,
-        borderRadius: 8,
-        backgroundColor: '#F5E6D3',
-        justifyContent: 'center',
-        alignItems: 'center',
-        borderWidth: 1,
-        borderColor: '#D4A574',
-    },
     editButton: {
         width: 32,
         height: 32,
@@ -2785,7 +2863,7 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
     },
     deleteButton: {
         width: 32,
@@ -2805,7 +2883,7 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
     },
     addStockButton: {
         width: 32,
@@ -2830,7 +2908,7 @@ const styles = StyleSheet.create({
     tableFooter: {
         padding: 16,
         borderTopWidth: 1,
-        borderTopColor: '#D4A574',
+        borderTopColor: '#854442',
         backgroundColor: '#F5E6D3',
         flexDirection: 'row',
         justifyContent: 'space-between',
@@ -2851,7 +2929,7 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         backgroundColor: '#F5E6D3',
-        gap: 8,
+        gap: 4,
     },
     paginationText: {
         fontSize: 14,
@@ -2863,11 +2941,10 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         backgroundColor: '#FFFFFF',
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
         borderRadius: 4,
-        paddingHorizontal: 8,
+        paddingHorizontal: 6,
         paddingVertical: 4,
-        gap: 4,
     },
     pageSelectorText: {
         fontSize: 14,
@@ -2888,7 +2965,7 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
     },
     pageButtonDisabled: {
         backgroundColor: '#F3F4F6',
@@ -2902,7 +2979,7 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
     },
     pageNumberActive: {
         backgroundColor: '#874E3B',
@@ -2924,7 +3001,8 @@ const styles = StyleSheet.create({
     loadingContainer: {
         padding: 20,
         alignItems: 'center',
-        backgroundColor: '#fffecaF2'
+        backgroundColor: 'rgba(223, 204, 175, 0.7)',
+        
     },
     emptyContainer: {
         padding: 20,
@@ -2947,7 +3025,7 @@ const styles = StyleSheet.create({
         backgroundColor: '#FFFEEA',
         borderRadius: 12,
         borderWidth: 2,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
         padding: 0,
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 4 },
@@ -2980,21 +3058,23 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
     },
     inputContainer: {
         marginTop: 16,
+         backgroundColor: 'transparent'
     },
     inputLabel: {
         fontSize: 16,
         color: '#5A3921',
         fontWeight: '500',
         marginBottom: 8,
+       
     },
     stocksInput: {
         backgroundColor: '#FFFFFF',
         borderWidth: 2,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
         borderRadius: 8,
         paddingHorizontal: 12,
         paddingVertical: 12,
@@ -3020,10 +3100,10 @@ const styles = StyleSheet.create({
         borderRadius: 6,
         backgroundColor: '#E8D8C8',
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
     },
     cancelModalButtonText: {
-        color: '#874E3B',
+        color: '#854442',
         fontSize: 14,
         fontWeight: 'bold',
     },
@@ -3031,7 +3111,7 @@ const styles = StyleSheet.create({
         paddingHorizontal: 20,
         paddingVertical: 10,
         borderRadius: 6,
-        backgroundColor: '#874E3B',
+        backgroundColor: '#854442',
     },
     saveModalButtonText: {
         color: '#FFFEEA',
@@ -3043,15 +3123,15 @@ const styles = StyleSheet.create({
         marginTop: 8,
     },
     iconOption: {
-        width: 40,
-        height: 40,
+        width: 60,
+        height: 60,
         borderRadius: 8,
         backgroundColor: '#F5E6D3',
         justifyContent: 'center',
         alignItems: 'center',
         marginRight: 8,
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
     },
     iconOptionSelected: {
         backgroundColor: '#874E3B',
@@ -3060,7 +3140,7 @@ const styles = StyleSheet.create({
     categoryDropdown: {
         backgroundColor: '#FFFFFF',
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
         borderRadius: 6,
         paddingHorizontal: 12,
         paddingVertical: 10,
@@ -3080,7 +3160,7 @@ const styles = StyleSheet.create({
         backgroundColor: '#FFFEEA',
         borderRadius: 8,
         borderWidth: 1,
-        borderColor: '#D4A574',
+        borderColor: '#854442',
         width: '80%',
         maxHeight: 300,
         overflow: 'hidden',
@@ -3092,7 +3172,7 @@ const styles = StyleSheet.create({
         paddingHorizontal: 16,
         paddingVertical: 12,
         borderBottomWidth: 1,
-        borderBottomColor: '#D4A574',
+        borderBottomColor: '#854442',
         backgroundColor: "#fffecaF2"
     },
     dropdownTitle: {

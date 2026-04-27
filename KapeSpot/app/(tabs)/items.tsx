@@ -1793,11 +1793,7 @@ export default function ItemsScreen() {
                                 <ThemedView style={styles.tableFooter}>
                                     <ThemedView style={styles.paginationContainer}>
                                         <ThemedView style={styles.itemsPerPage}>
-                                            <ThemedText style={styles.paginationText}>Items per page</ThemedText>
-                                            <ThemedView style={styles.pageSelector}>
-                                                <ThemedText style={styles.pageSelectorText}>{itemsPerPage}</ThemedText>
-                                                <Feather name="chevron-down" size={16} color="#874E3B" />
-                                            </ThemedView>
+                                            <ThemedText style={styles.paginationText}>Page</ThemedText>
                                         </ThemedView>
 
                                         <ThemedView style={styles.pageNavigation}>
